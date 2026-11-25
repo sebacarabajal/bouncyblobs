@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <!-- celular: agregándolo a la pantalla de inicio se abre a pantalla completa, como una app -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Bouncy Blobs" />
+    <meta name="theme-color" content="#170828" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <title>Bouncy Blobs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Lilita+One&family=Nunito:wght@700;800;900&display=swap" rel="stylesheet" />
+    <style>
+      * { box-sizing: border-box; }
+      html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #1b0c35; font-family: 'Trebuchet MS', system-ui, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+      #app canvas { touch-action: none; }
+      #app canvas { display: block; }
+      /* ---------- HUD: estilo "calcomanía" (bordes gruesos, sombras sólidas, letra gorda) ---------- */
+      :root { --ink: #12051f; --panel: #24103f; --panel2: #321a58; --cream: #fff1dc; --gold: #ffd21a; --silver: #d7d2e6; --bronze: #e08a4a; }
+      .disp { font-family: 'Lilita One', 'Trebuchet MS', system-ui, sans-serif; font-weight: 400; letter-spacing: 0.5px; }
+      #help {
+        position: fixed; top: 14px; left: 14px; padding: 10px 14px 12px; border-radius: 16px; max-width: 360px;
+        background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 5px 0 var(--ink); font-size: 12.5px; line-height: 1.65; color: #e9defa;
+      }
+      #help b { display: block; font-family: 'Lilita One', system-ui, sans-serif; font-weight: 400; font-size: 19px; margin-bottom: 4px; letter-spacing: 1px; color: var(--cream); }
+      #help kbd { display: inline-block; min-width: 18px; text-align: center; background: var(--cream); color: var(--ink); border-radius: 5px; padding: 0 5px; font: 800 11px/1.5 'Nunito', system-ui, sans-serif; box-shadow: 0 2px 0 var(--ink); border: 1.5px solid var(--ink); }
+      #perf { position: fixed; right: 12px; bottom: 10px; z-index: 6; font: 11px/1.45 ui-monospace, monospace; color: #e8dcff; background: rgba(15, 6, 30, 0.6); padding: 5px 9px; border-radius: 8px; pointer-events: none; text-align: right; }
+      #perf span { color: #bba9dd; }
+      body.in-lobby #perf { display: none; }
+      #mode { margin-top: 6px; display: inline-block; padding: 2px 8px; border-radius: 8px; background: rgba(255,255,255,0.12); }
+      #mode.hot { background: #ff4f6d; }
+      .white { color: #fff; font-weight: bold; text-shadow: 0 0 8px #fff; }
+
+      /* tu gelatina (abajo a la izquierda) */
+      #me {
+        --c: #fff; position: fixed; left: 16px; top: 30px; width: 340px; padding: 26px 14px 12px; border-radius: 22px;
+        background: linear-gradient(color-mix(in srgb, var(--c) 18%, var(--panel)), var(--panel) 60%); border: 3px solid var(--ink); box-shadow: 0 6px 0 var(--ink);
+        font-family: 'Nunito', system-ui, sans-serif;
+      }
+      #me .me-tag { position: absolute; left: 12px; top: -20px; padding: 3px 16px 5px; border-radius: 14px; background: var(--c); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); transform: rotate(-3deg); max-width: 210px; }
+      #me .me-tag .nm { display: block; font-family: 'Lilita One', system-ui, sans-serif; font-size: 24px; line-height: 1; color: #fff; -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-top: 2px; }
+      /* gotas que cuelgan del cartel del nombre */
+      #me .me-tag::after { content: ''; position: absolute; left: 22px; bottom: -11px; width: 34px; height: 12px;
+        background: radial-gradient(circle at 6px 3px, var(--c) 5px, transparent 5.5px), radial-gradient(circle at 24px 1px, var(--c) 7px, transparent 7.5px); }
+      #me .me-pts { position: absolute; right: 12px; top: -16px; min-width: 92px; padding: 2px 10px 3px; text-align: center; border-radius: 12px; background: var(--gold); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); transform: rotate(2deg); color: var(--ink); line-height: 1; }
+      #me .me-pts b { font-family: 'Lilita One', system-ui, sans-serif; font-weight: 400; font-size: 24px; }
+      #me .me-pts small { font-weight: 900; font-size: 11px; margin-left: 3px; }
+      #me .me-stats { display: flex; gap: 14px; margin: 2px 2px 6px; font-size: 12px; font-weight: 800; color: #cbb9ea; text-transform: uppercase; letter-spacing: 0.5px; }
+      #me .me-stats b { font-family: 'Lilita One', system-ui, sans-serif; font-weight: 400; font-size: 17px; color: var(--cream); margin-right: 3px; }
+      #me .gauge { display: grid; grid-template-columns: 1fr 46px; grid-template-rows: auto auto; column-gap: 8px; margin-top: 4px; }
+      #me .gauge .lbl { grid-column: 1; font-weight: 900; font-size: 10.5px; letter-spacing: 1.2px; color: #cbb9ea; margin: 0 0 1px 6px; }
+      #me .gauge .v { grid-column: 2; grid-row: 1 / 3; align-self: end; text-align: right; font-family: 'Lilita One', system-ui, sans-serif; font-weight: 400; font-size: 21px; line-height: 1.05; color: var(--cream); }
+      /* tubo de vidrio con gelatina adentro */
+      .tube { position: relative; height: 20px; border-radius: 99px; background: #170a2b; border: 3px solid var(--ink); overflow: hidden; box-shadow: inset 0 3px 0 rgba(0,0,0,0.35); }
+      .tube > i { position: absolute; inset: 0; border-radius: 99px; background: var(--f, #fff); transform: translateX(-100%); transition: transform 0.18s ease-out, background-color 0.3s; will-change: transform; }
+      .tube > i::before { content: ''; position: absolute; right: -5px; top: -3px; bottom: -3px; width: 14px; border-radius: 50%; background: inherit; animation: meniscus 0.9s ease-in-out infinite alternate; }
+      .tube > i::after { content: ''; position: absolute; left: 8px; right: 10px; top: 3px; height: 4px; border-radius: 4px; background: rgba(255,255,255,0.45); }
+      .tube::after { content: ''; position: absolute; inset: 0; border-radius: 99px; box-shadow: inset 0 -4px 0 rgba(0,0,0,0.18); pointer-events: none; }
+      @keyframes meniscus { from { transform: scaleX(0.75); } to { transform: scaleX(1.15); } }
+      #me .gauge.mass .tube > i { --f: #f4eefe; }
+      #me.sprint .gauge.cd .tube > i { --f: #ff9d2e; }
+      #me .gauge.cd .tube > i { --f: #c6f03a; }
+      #me .gauge.cd .cost { position: absolute; top: -3px; bottom: -3px; width: 3px; margin-left: -1.5px; background: var(--ink); z-index: 1; }
+      #me.ready .gauge.cd .tube { border-color: var(--ink); box-shadow: inset 0 3px 0 rgba(0,0,0,0.35), 0 0 0 2px #c6f03a; }
+      #me.ready .cdv { color: #c6f03a; }
+      #me .me-bottom { display: flex; align-items: center; gap: 8px; margin-top: 10px; min-height: 52px; }
+      /* armas: teclas de verdad (D / F) */
+      #me .weapon { display: flex; gap: 8px; }
+      #me .key { position: relative; width: 50px; height: 48px; border-radius: 11px; background: #3a2260; border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); display: grid; place-items: center; opacity: 0.45; filter: grayscale(0.8); }
+      #me .key.on { opacity: 1; filter: none; background: var(--cream); }
+      #me .key kbd { position: absolute; left: 5px; top: 2px; font: 900 11px/1 'Nunito', system-ui, sans-serif; color: #8d7bb0; }
+      #me .key.on kbd { color: var(--ink); }
+      #me .key i { font-style: normal; font-size: 22px; line-height: 1; margin-top: 4px; }
+      #me .key b { position: absolute; right: -8px; bottom: -8px; min-width: 22px; height: 22px; padding: 0 4px; border-radius: 11px; background: #ff4f6d; border: 2.5px solid var(--ink); color: #fff; font: 400 13px/17px 'Lilita One', system-ui, sans-serif; text-align: center; }
+      #me .key:not(.on) b { display: none; }
+      /* poderes activos: anillo que se va vaciando */
+      #me .buffs { display: flex; gap: 8px; margin-left: auto; }
+      #me .buff { position: relative; width: 44px; height: 44px; border-radius: 50%; display: grid; place-items: center; border: 3px solid var(--ink); box-shadow: 0 3px 0 var(--ink);
+        background: conic-gradient(var(--gold) calc(var(--p) * 360deg), #3a2260 0); }
+      #me .buff::before { content: ''; position: absolute; inset: 4px; border-radius: 50%; background: var(--panel2); }
+      #me .buff i { position: relative; font-style: normal; font-size: 19px; line-height: 1; }
+      #me .buff b { position: absolute; bottom: -9px; left: 50%; transform: translateX(-50%); font: 400 12px/1 'Lilita One', system-ui, sans-serif; color: var(--cream); -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; }
+      #me .buff.slip { background: #8a6a3a; }
+      @keyframes pulse { from { transform: translate(-50%, -50%) rotate(-4deg) scale(1); } to { transform: translate(-50%, -50%) rotate(-2deg) scale(1.07); } }
+
+      /* tabla de posiciones (derecha) */
+      #rivals { position: fixed; right: 16px; top: 76px; width: 300px; padding: 22px 8px 8px; border-radius: 20px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 6px 0 var(--ink); font-family: 'Nunito', system-ui, sans-serif; font-size: 13px; }
+      .rank-title { position: absolute; left: 50%; top: -18px; transform: translateX(-50%) rotate(-2deg); padding: 3px 18px 4px; border-radius: 12px; background: var(--gold); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font-family: 'Lilita One', system-ui, sans-serif; font-size: 19px; letter-spacing: 1.5px; color: var(--ink); white-space: nowrap; }
+      .rival { --c: #fff; position: relative; display: grid; grid-template-columns: 24px 26px 1fr auto 44px; grid-template-rows: auto 4px; column-gap: 6px; align-items: center; padding: 3px 8px 4px 4px; border-radius: 12px; margin-top: 1px; }
+      .rival:nth-child(odd) { background: rgba(255,255,255,0.035); }
+      .rival .pos { grid-row: 1 / 3; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font: 400 13px/1 'Lilita One', system-ui, sans-serif; color: #9f8cc4; }
+      .rival.p1 .pos, .rival.p2 .pos, .rival.p3 .pos { color: var(--ink); border: 2px solid var(--ink); }
+      .rival.p1 .pos { background: var(--gold); } .rival.p2 .pos { background: var(--silver); } .rival.p3 .pos { background: var(--bronze); }
+      /* la gelatinita del color de cada uno; el tamaño muestra su masa */
+      .rival .blob { grid-row: 1 / 3; justify-self: center; width: 18px; height: 17px; border-radius: 50% 50% 44% 44% / 60% 60% 40% 40%; border: 2px solid var(--ink);
+        background: radial-gradient(circle at 35% 30%, color-mix(in srgb, var(--c) 35%, #fff), var(--c) 55%); transform: scale(var(--s, 1)); transform-origin: 50% 80%; transition: transform 0.3s; }
+      .rival .n { color: #f2e9ff; font-weight: 800; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .rival .k { font-weight: 800; font-size: 11px; color: #a995cc; white-space: nowrap; }
+      .rival .s { grid-row: 1 / 3; text-align: right; font: 400 16px/1 'Lilita One', system-ui, sans-serif; color: var(--cream); }
+      .rival .st { grid-column: 3 / 5; grid-row: 2; height: 4px; border-radius: 2px; background: rgba(0,0,0,0.4); overflow: hidden; }
+      .rival .st i { display: block; height: 100%; width: 100%; border-radius: 2px; transform-origin: 0 50%; transform: scaleX(var(--st, 1)); background: var(--c); }
+      .rival.me { background: color-mix(in srgb, var(--c) 30%, var(--panel2)); border: 2px solid var(--ink); box-shadow: 0 3px 0 var(--ink); margin: 3px -3px; padding-left: 6px; padding-right: 10px; }
+      .rival.me .n { color: #fff; }
+      .rival.out { opacity: 0.38; }
+      .rival.out .blob { filter: grayscale(1); }
+      .rival.isdazed .n::after { content: ' 💫'; }
+      #popups { position: fixed; inset: 0; pointer-events: none; }
+      .popup { position: absolute; left: 0; top: 0; will-change: transform, opacity; contain: layout style; font-family: 'Lilita One', system-ui, sans-serif; font-size: 24px; -webkit-text-stroke: 4px #12051f; paint-order: stroke fill; text-shadow: 0 2px 0 #000; white-space: nowrap; }
+      .popup.big { font-size: 46px; -webkit-text-stroke: 6px #12051f; }
+      #toast { position: fixed; top: 18px; left: 50%; transform: translate(-50%, -10px) rotate(-1.5deg); padding: 6px 18px 7px; border-radius: 14px; background: var(--gold); color: var(--ink); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font: 400 18px/1.1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; opacity: 0; transition: opacity 0.2s, transform 0.2s; pointer-events: none; z-index: 30; }
+      #toast.show { opacity: 1; transform: translate(-50%, 0) rotate(-1.5deg); }
+      #app canvas { cursor: grab; }
+      #app canvas:active { cursor: grabbing; }
+      /* pantalla de carga (las animaciones son sólo transform/opacity: siguen moviéndose aunque el juego esté ocupado) */
+      #loading { position: fixed; inset: 0; z-index: 100; display: grid; place-content: center; justify-items: center; gap: 18px; background: radial-gradient(ellipse at 50% 45%, #3a1666, #0c0518 70%); opacity: 0; visibility: hidden; transition: opacity 0.35s, visibility 0s 0.35s; pointer-events: none; }
+      #loading.show { opacity: 1; visibility: visible; transition: none; pointer-events: auto; }
+      #loading .ld-title { font-size: 58px; min-height: 1.2em; }
+      #loading .ld-blob { position: relative; width: 96px; height: 84px; transform-origin: 50% 100%; animation: ld-bounce 0.9s cubic-bezier(0.3, 0, 0.4, 1) infinite; }
+      #loading .ld-blob i { position: absolute; inset: 0; border-radius: 50% 50% 44% 44% / 60% 60% 40% 40%; background: radial-gradient(circle at 34% 30%, #ffd1ea, #ff4fa3 45%, #a3125e); box-shadow: inset -8px -10px 18px rgba(80, 0, 40, 0.45), 0 0 30px rgba(255, 79, 163, 0.45); }
+      #loading .ld-blob b { position: absolute; top: 34%; width: 10px; height: 14px; border-radius: 50%; background: #1a0820; }
+      #loading .ld-blob b:first-of-type { left: 32%; } #loading .ld-blob b:last-of-type { right: 32%; }
+      #loading .ld-shadow { width: 90px; height: 12px; margin-top: -14px; border-radius: 50%; background: rgba(0, 0, 0, 0.45); animation: ld-shadow 0.9s cubic-bezier(0.3, 0, 0.4, 1) infinite; }
+      #loading .ld-text { font-size: 18px; color: #d9c6f2; }
+      @keyframes ld-bounce { 0%, 100% { transform: translateY(0) scale(1.18, 0.82); } 15% { transform: translateY(-6px) scale(0.92, 1.1); } 50% { transform: translateY(-46px) scale(0.96, 1.04); } 85% { transform: translateY(-4px) scale(1.04, 0.96); } }
+      @keyframes ld-shadow { 0%, 100% { transform: scale(1.1); opacity: 0.9; } 50% { transform: scale(0.6); opacity: 0.35; } }
+
+      /* ---------- pantalla de inicio (mismo estilo calcomanía que el HUD) ---------- */
+      #lobby { --pc: #ff4fa3; position: fixed; inset: 0; z-index: 20; display: none; overflow-y: auto; padding: 28px 24px 24px; font-family: 'Nunito', system-ui, sans-serif;
+        background: radial-gradient(circle at 1px 1px, rgba(255,255,255,0.06) 1.5px, transparent 2px) 0 0 / 26px 26px, radial-gradient(ellipse at 50% 35%, #3a1868, #170828 75%); }
+      #lobby.show { display: grid; }
+      body.in-lobby #help, body.in-lobby #me, body.in-lobby #rivals, body.in-lobby .lil-gui { display: none !important; }
+      .lb-wrap { margin: auto; display: grid; grid-template-columns: 400px minmax(300px, 560px); grid-template-rows: auto 1fr; column-gap: 34px; row-gap: 22px; align-items: start; width: min(100%, 1000px); }
+      .lb-logo { grid-column: 1 / -1; justify-self: center; text-align: center; }
+      .lb-logo h1 { margin: 0; font: 400 76px/0.95 'Lilita One', system-ui, sans-serif; letter-spacing: 4px; color: var(--pc); -webkit-text-stroke: 10px var(--ink); paint-order: stroke fill; text-shadow: 0 7px 0 var(--ink); transform: rotate(-2deg); }
+      .lb-sub { display: inline-block; margin: 10px 0 0; padding: 4px 14px; border-radius: 10px; background: var(--gold); color: var(--ink); border: 3px solid var(--ink); box-shadow: 0 3px 0 var(--ink); font-weight: 900; font-size: 13px; transform: rotate(1.5deg); }
+      .lb-panel { padding: 18px 20px 20px; border-radius: 24px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 7px 0 var(--ink); user-select: none; }
+      .lb-h { display: flex; align-items: baseline; gap: 8px; margin: 16px 0 7px; font: 400 17px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 1px; color: var(--cream); }
+      .lb-h:first-child { margin-top: 0; }
+      .lb-hint { font: 800 11px/1 'Nunito', system-ui, sans-serif; letter-spacing: 0; color: #a995cc; }
+      .lb-name, .lb-hex { width: 100%; padding: 8px 12px; border-radius: 12px; border: 3px solid var(--ink); background: var(--cream); color: var(--ink); font: 400 20px/1.1 'Lilita One', system-ui, sans-serif; outline: none; box-shadow: inset 0 3px 0 rgba(0,0,0,0.12); }
+      .lb-name:focus, .lb-hex:focus { box-shadow: inset 0 3px 0 rgba(0,0,0,0.12), 0 0 0 3px var(--pc); }
+      /* botones: calcomanías que se hunden al apretar */
+      .lb-panel button { padding: 7px 11px; border-radius: 12px; border: 3px solid var(--ink); background: var(--panel2); color: var(--cream); font: 800 13px/1.1 'Nunito', system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 0 var(--ink); transition: transform 0.06s, box-shadow 0.06s; }
+      .lb-panel button:hover { background: #432570; }
+      .lb-panel button:active { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
+      .lb-panel button.on { background: var(--pc); color: var(--ink); }
+      /* forma */
+      .lb-shapes { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
+      .lb-panel button.lb-shape { display: grid; justify-items: center; gap: 2px; padding: 5px 0 4px; font-size: 10.5px; font-weight: 900; }
+      .lb-shape svg { width: 100%; max-width: 42px; aspect-ratio: 1; }
+      .lb-shape path { fill: var(--pc); stroke: var(--ink); stroke-width: 3; stroke-linejoin: round; }
+      .lb-shape circle { fill: var(--ink); }
+      .lb-panel button.lb-shape.on { background: var(--cream); color: var(--ink); transform: translateY(-3px) rotate(-2deg); box-shadow: 0 5px 0 var(--ink); }
+      /* color */
+      .lb-sv, .lb-hue { position: relative; touch-action: none; cursor: crosshair; }
+      .lb-sv canvas { display: block; width: 100%; height: 150px; border-radius: 14px; border: 3px solid var(--ink); }
+      .lb-hue { margin-top: 10px; }
+      .lb-hue canvas { display: block; width: 100%; height: 20px; border-radius: 10px; border: 3px solid var(--ink); }
+      .lb-drop { position: absolute; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); border: 3px solid var(--ink); box-shadow: 0 0 0 2px #fff, 0 4px 0 2px var(--ink); pointer-events: none; }
+      .lb-hcur { position: absolute; top: -5px; width: 16px; height: 30px; margin-left: -8px; border-radius: 7px; border: 3px solid var(--ink); box-shadow: 0 0 0 2px #fff; pointer-events: none; }
+      .lb-crow { display: grid; grid-template-columns: 44px 1fr auto; gap: 8px; margin-top: 12px; align-items: center; }
+      .lb-sw { width: 44px; height: 40px; border-radius: 12px; border: 3px solid var(--ink); box-shadow: 0 3px 0 var(--ink); }
+      .lb-hex { font: 800 16px/1.1 ui-monospace, monospace; text-transform: lowercase; padding: 8px 10px; }
+      /* tatuaje */
+      .lb-tat { display: grid; grid-template-columns: 150px 1fr; gap: 14px; align-items: start; }
+      .lb-pad { width: 150px; height: 150px; border-radius: 50%; background: color-mix(in srgb, var(--pc) 65%, #fff 10%); border: 3px solid var(--ink); box-shadow: inset 0 -12px 24px rgba(0,0,0,0.3), inset 0 10px 18px rgba(255,255,255,0.35), 0 4px 0 var(--ink); overflow: hidden; touch-action: none; }
+      .lb-pad canvas { display: block; width: 100%; height: 100%; cursor: crosshair; }
+      .lb-inks { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+      .lb-panel button.lb-ink { height: 26px; padding: 0; border-radius: 9px; box-shadow: 0 2px 0 var(--ink); }
+      .lb-panel button.lb-ink.on { transform: translateY(-2px); box-shadow: 0 0 0 2px #fff, 0 4px 0 2px var(--ink); }
+      .lb-trow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 10px; font-size: 12px; font-weight: 800; color: #cbb9ea; }
+      .lb-trow input[type=range] { flex: 1; accent-color: var(--pc); }
+      .lb-panel button.lb-go { display: block; width: 100%; margin-top: 20px; padding: 12px 14px 14px; font: 400 32px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 2px; color: #fff; -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; background: var(--pc); border: 4px solid var(--ink); border-radius: 18px; box-shadow: 0 7px 0 var(--ink); }
+      .lb-panel button.lb-go:hover { background: var(--pc); filter: brightness(1.08); transform: translateY(-2px) rotate(-1deg); box-shadow: 0 9px 0 var(--ink); }
+      .lb-panel button.lb-go:active { transform: translateY(6px); box-shadow: 0 1px 0 var(--ink); }
+      .lb-panel button.lb-tut { display: block; width: 100%; margin-top: 10px; padding: 9px 12px; font: 400 17px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; background: var(--gold); color: var(--ink); }
+      .lb-panel button.lb-tut:hover { background: var(--gold); filter: brightness(1.08); }
+      /* ventanita "¿primera vez?" */
+      .lb-modal { position: fixed; inset: 0; z-index: 5; display: none; place-items: center; padding: 16px; background: rgba(12, 4, 24, 0.72); }
+      .lb-modal.show { display: grid; animation: lb-fade 0.15s ease-out; }
+      .lb-mbox { position: relative; width: min(400px, 100%); padding: 54px 24px 22px; border-radius: 24px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 8px 0 var(--ink); text-align: center; animation: lb-pop 0.25s cubic-bezier(0.3, 1.5, 0.5, 1); }
+      .lb-mbox h2 { margin: 0 0 8px; font: 400 30px/1.05 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--cream); -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; transform: rotate(-1.5deg); }
+      .lb-mbox p { margin: 0 0 18px; font: 700 14px/1.45 'Nunito', system-ui, sans-serif; color: #cbb9ea; }
+      .lb-mbox button { display: block; width: 100%; border: 3px solid var(--ink); border-radius: 14px; cursor: pointer; box-shadow: 0 4px 0 var(--ink); transition: transform 0.06s, box-shadow 0.06s; }
+      .lb-mbox button:active { transform: translateY(4px); box-shadow: 0 0 0 var(--ink); }
+      .lb-mbox .lb-myes { padding: 10px 12px 12px; background: var(--pc); color: #fff; font: 400 22px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 1px; -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill; }
+      .lb-mbox .lb-myes:hover, .lb-mbox .lb-myes:focus-visible { filter: brightness(1.08); outline: none; transform: translateY(-2px); box-shadow: 0 6px 0 var(--ink); }
+      .lb-mbox .lb-mno { margin-top: 10px; padding: 8px 12px; background: var(--panel2); color: var(--cream); font: 800 14px/1.1 'Nunito', system-ui, sans-serif; }
+      .lb-mbox .lb-mno:hover, .lb-mbox .lb-mno:focus-visible { background: #432570; outline: none; }
+      .lb-mblob { position: absolute; top: -40px; left: 50%; width: 84px; height: 72px; margin-left: -42px; transform-origin: 50% 100%; animation: ld-bounce 0.9s cubic-bezier(0.3, 0, 0.4, 1) infinite; }
+      .lb-mblob i { position: absolute; inset: 0; border-radius: 50% 50% 44% 44% / 60% 60% 40% 40%; background: radial-gradient(circle at 34% 30%, #ffd1ea, var(--pc) 45%, #a3125e); border: 3px solid var(--ink); }
+      .lb-mblob b { position: absolute; top: 36%; width: 9px; height: 13px; border-radius: 50%; background: var(--ink); }
+      .lb-mblob b:first-of-type { left: 32%; } .lb-mblob b:last-of-type { right: 32%; }
+      @keyframes lb-fade { from { opacity: 0; } }
+      @keyframes lb-pop { from { transform: scale(0.85); opacity: 0; } }
+      .lb-foot { margin: 10px 0 0; font-size: 11.5px; font-weight: 800; color: #a995cc; text-align: center; }
+      .lb-foot kbd { display: inline-block; background: var(--cream); color: var(--ink); border: 2px solid var(--ink); border-radius: 5px; padding: 0 5px; font: 900 11px/1.4 'Nunito', system-ui, sans-serif; box-shadow: 0 2px 0 var(--ink); }
+      /* vista previa: marco de calcomanía con el nombre arriba, como en el juego */
+      .lb-stage { display: grid; justify-items: center; align-content: start; padding-top: 18px; position: sticky; top: 0; }
+      .lb-3d { display: block; width: 100%; aspect-ratio: 1; touch-action: pan-y; border-radius: 28px; border: 4px solid var(--ink); box-shadow: 0 8px 0 var(--ink); cursor: grab; background: #2a1150; }
+      .lb-tag { position: absolute; top: 0; left: 50%; transform: translateX(-50%) rotate(-3deg); max-width: 80%; padding: 4px 20px 6px; border-radius: 14px; background: var(--pc); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font: 400 30px/1 'Lilita One', system-ui, sans-serif; color: #fff; -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; z-index: 1; }
+      .lb-tip { margin-top: 14px; padding: 3px 12px; border-radius: 9px; background: var(--panel); border: 2px solid var(--ink); font-size: 12px; font-weight: 800; color: #cbb9ea; white-space: nowrap; }
+      @media (max-width: 900px) {
+        .lb-wrap { grid-template-columns: minmax(0, 460px); justify-content: center; }
+        .lb-stage { grid-row: 2; position: static; }
+        .lb-3d { width: min(100%, 46vh); }
+        .lb-logo h1 { font-size: 54px; }
+      }
+      @media (max-width: 440px) { .lb-tat { grid-template-columns: 1fr; justify-items: center; } .lb-shapes { grid-template-columns: repeat(5, 1fr); } }
+      .lb-quality, .lb-langs { display: flex; flex-wrap: wrap; gap: 6px; }
+      .lb-panel .lb-langs button { padding: 6px 12px; font-size: 13px; }
+      .lb-panel .lb-quality button { padding: 6px 9px; font-size: 12px; }
+      /* celular acostado: el panel se desplaza y la vista previa queda fija al lado */
+      @media (max-height: 520px) and (orientation: landscape) {
+        #lobby { padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right)) 10px calc(12px + env(safe-area-inset-left)); }
+        .lb-wrap { grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr); column-gap: 16px; row-gap: 6px; width: 100%; }
+        .lb-logo h1 { font-size: 32px; -webkit-text-stroke-width: 6px; text-shadow: 0 4px 0 var(--ink); }
+        .lb-sub { display: none; }
+        .lb-panel { padding: 12px 14px 14px; }
+        .lb-stage { grid-row: 2; grid-column: 2; position: sticky; top: 0; padding-top: 14px; }
+        .lb-3d { width: min(100%, calc(100dvh - 110px)); }
+        .lb-tag { font-size: 20px; -webkit-text-stroke-width: 4px; }
+        .lb-tip { display: none; }
+        .lb-panel button.lb-go { font-size: 26px; }
+      }
+
+      /* ---------- controles táctiles ---------- */
+      #touch { position: fixed; inset: 0; z-index: 8; pointer-events: none; font-family: 'Lilita One', system-ui, sans-serif; }
+      body.in-lobby #touch { display: none; }
+      #touch .tc-zone { position: absolute; left: 0; top: 28%; bottom: 0; width: 46%; pointer-events: auto; touch-action: none; }
+      #touch .tc-base { position: fixed; width: 112px; height: 112px; margin: -56px 0 0 -56px; border-radius: 50%; border: 4px solid rgba(18, 5, 31, 0.7); background: rgba(255, 255, 255, 0.1); display: none; pointer-events: none; transition: border-color 0.15s, box-shadow 0.15s; }
+      #touch .tc-base.on { display: block; }
+      #touch .tc-base.run { border-color: #ff9d2e; box-shadow: 0 0 0 4px rgba(255, 157, 46, 0.45); }
+      #touch .tc-knob { position: absolute; left: 50%; top: 50%; width: 54px; height: 54px; margin: -27px 0 0 -27px; border-radius: 50%; background: var(--cream); border: 4px solid var(--ink); box-shadow: 0 4px 0 var(--ink); }
+      #touch .tc-btn { position: absolute; pointer-events: auto; touch-action: none; display: grid; place-items: center; padding: 0; border-radius: 50%; border: 4px solid var(--ink); box-shadow: 0 5px 0 var(--ink); color: #fff; font: inherit; cursor: pointer; }
+      #touch .tc-btn span { font-size: 12px; letter-spacing: 0.5px; -webkit-text-stroke: 3px var(--ink); paint-order: stroke fill; }
+      #touch .tc-btn.down { transform: translateY(4px); box-shadow: 0 1px 0 var(--ink); filter: brightness(1.15); }
+      #touch .tc-jump { right: calc(20px + env(safe-area-inset-right)); bottom: calc(20px + env(safe-area-inset-bottom)); width: 92px; height: 92px; background: var(--gold); }
+      #touch .tc-dash { right: calc(124px + env(safe-area-inset-right)); bottom: calc(30px + env(safe-area-inset-bottom)); width: 78px; height: 78px; background: #ff4f6d; }
+      #touch .tc-dash span { font-size: 10.5px; }
+      #touch .tc-w { width: 56px; height: 56px; background: #3a2260; opacity: 0.55; }
+      #touch .tc-w.on { background: var(--cream); opacity: 1; }
+      #touch .tc-w i { font-style: normal; font-size: 24px; line-height: 1; }
+      #touch .tc-w b { position: absolute; right: -7px; bottom: -7px; min-width: 22px; height: 22px; border-radius: 11px; background: #ff4f6d; border: 2.5px solid var(--ink); font: 400 13px/17px 'Lilita One', system-ui, sans-serif; color: #fff; }
+      #touch .tc-w:not(.on) b { display: none; }
+      #touch .tc-spit { right: calc(36px + env(safe-area-inset-right)); bottom: calc(132px + env(safe-area-inset-bottom)); }
+      #touch .tc-oil { right: calc(112px + env(safe-area-inset-right)); bottom: calc(124px + env(safe-area-inset-bottom)); }
+      #touch .tc-menu { position: absolute; left: 50%; top: calc(6px + env(safe-area-inset-top)); transform: translateX(-50%); pointer-events: auto; width: 46px; height: 36px; border-radius: 12px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 3px 0 var(--ink); color: var(--cream); font: 900 20px/1 'Nunito', system-ui, sans-serif; }
+      /* HUD más chico y arriba, para dejar libres los pulgares */
+      body.touch #help, body.touch .lil-gui { display: none !important; }
+      body.touch .lb-foot { display: none; }
+      body.touch #me { left: calc(8px + env(safe-area-inset-left)); top: calc(20px + env(safe-area-inset-top)); bottom: auto; transform: scale(0.58); transform-origin: 0 0; }
+      body.touch #me .weapon { display: none; }
+      body.touch #rivals { right: calc(8px + env(safe-area-inset-right)); top: calc(18px + env(safe-area-inset-top)); transform: scale(0.6); transform-origin: 100% 0; }
+      body.touch .rival:nth-child(n+7):not(.me) { display: none; }
+      body.touch .popup { font-size: 17px; -webkit-text-stroke-width: 3px; }
+      body.touch .popup.big { font-size: 30px; -webkit-text-stroke-width: 4px; }
+      body.touch #perf { right: auto; left: 50%; transform: translateX(-50%); bottom: calc(2px + env(safe-area-inset-bottom)); font-size: 9px; padding: 3px 7px; }
+      /* el juego va acostado */
+      #rotate { display: none; position: fixed; inset: 0; z-index: 95; place-content: center; justify-items: center; gap: 10px; background: radial-gradient(ellipse at 50% 40%, #3a1868, #170828 75%); text-align: center; padding: 24px; }
+      #rotate .rt-phone { font-size: 64px; animation: rt-turn 1.6s ease-in-out infinite; }
+      #rotate b { font: 400 30px/1 'Lilita One', system-ui, sans-serif; color: var(--gold); -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; }
+      #rotate span { font: 800 14px/1.3 'Nunito', system-ui, sans-serif; color: #cbb9ea; }
+      @keyframes rt-turn { 0%, 30% { transform: rotate(0); } 60%, 100% { transform: rotate(-90deg); } }
+      /* ---------- tutorial: tarjeta arriba al centro ---------- */
+      #tutorial { display: none; position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 25; width: min(460px, calc(100vw - 32px)); }
+      #tutorial.show { display: block; }
+      body.tutorial #rivals, body.tutorial #help { display: none !important; }
+      .tu-card { position: relative; padding: 12px 16px 14px; border-radius: 20px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 6px 0 var(--ink); font: 700 14px/1.45 'Nunito', system-ui, sans-serif; color: #e9defa; transition: transform 0.15s; }
+      .tu-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+      .tu-step { padding: 2px 10px; border-radius: 8px; background: var(--gold); color: var(--ink); border: 2px solid var(--ink); font: 900 11px/1.4 'Nunito', system-ui, sans-serif; letter-spacing: 1px; transform: rotate(-2deg); }
+      .tu-card button { border: 3px solid var(--ink); border-radius: 12px; background: var(--panel2); color: var(--cream); font: 800 12px/1.1 'Nunito', system-ui, sans-serif; padding: 5px 10px; cursor: pointer; box-shadow: 0 3px 0 var(--ink); }
+      .tu-card button:hover { background: #432570; }
+      .tu-card button:active { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
+      .tu-title { font: 400 28px/1.05 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--cream); -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill; margin: 2px 0 4px; }
+      .tu-text b { color: var(--gold); }
+      .tu-text kbd { display: inline-block; min-width: 22px; text-align: center; background: var(--cream); color: var(--ink); border: 2px solid var(--ink); border-radius: 6px; padding: 0 6px; font: 900 13px/1.5 'Nunito', system-ui, sans-serif; box-shadow: 0 2px 0 var(--ink); }
+      .tu-list { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 5px; }
+      .tu-list:empty { display: none; }
+      .tu-list li { display: grid; grid-template-columns: 26px 1fr; gap: 8px; align-items: center; padding: 4px 8px 4px 4px; border-radius: 10px; background: var(--panel2); border: 2px solid var(--ink); font-size: 13px; line-height: 1.35; }
+      .tu-list li i { display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px; background: #170828; border: 2px solid var(--ink); font: 900 13px/1 'Nunito', system-ui, sans-serif; font-style: normal; color: var(--gold); }
+      .tu-list li b { color: var(--cream); }
+      .tu-list li.got { background: #1f5a33; }
+      .tu-list li.got i { background: #36e05a; color: var(--ink); font-size: 0; }
+      .tu-list li.got i::after { content: '✓'; font-size: 15px; }
+      .tu-list li kbd { display: inline-block; min-width: 20px; text-align: center; background: var(--cream); color: var(--ink); border: 2px solid var(--ink); border-radius: 6px; padding: 0 5px; font: 900 12px/1.4 'Nunito', system-ui, sans-serif; box-shadow: 0 2px 0 var(--ink); }
+      .tu-prog { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; margin-top: 10px; }
+      .tu-prog .tube { height: 14px; border-radius: 8px; border: 3px solid var(--ink); background: #170828; overflow: hidden; }
+      .tu-prog .tube i { display: block; height: 100%; background: var(--gold); transform: translateX(-100%); transition: transform 0.15s; }
+      .tu-prog b { font: 400 16px/1 'Lilita One', system-ui, sans-serif; color: var(--cream); min-width: 64px; text-align: right; }
+      .tu-ok { position: absolute; right: 14px; bottom: -16px; padding: 3px 14px 4px; border-radius: 12px; background: #36e05a; color: var(--ink); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); font: 400 20px/1 'Lilita One', system-ui, sans-serif; transform: rotate(-4deg) scale(0); transition: transform 0.18s cubic-bezier(0.3, 1.6, 0.5, 1); }
+      .tu-card.ok { transform: scale(1.03); }
+      .tu-card.ok .tu-ok { transform: rotate(-4deg) scale(1); }
+      .tu-card.ok .tu-prog .tube i { background: #36e05a; }
+      .tu-end { display: none; gap: 8px; margin-top: 12px; }
+      .tu-card.end .tu-end { display: flex; }
+      .tu-card.end .tu-prog, .tu-card.end .tu-skip { display: none; }
+      .tu-card .tu-play { flex: 1; font: 400 20px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 1px; background: #ff4fa3; color: #fff; -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; padding: 8px 12px 10px; }
+      .tu-card .tu-play:hover { background: #ff4fa3; filter: brightness(1.08); }
+      /* celular / tablet: cartel de "solo para compu" (lo pone src/boot.js) */
+      #desktop-only { position: fixed; inset: 0; z-index: 110; display: grid; place-content: center; justify-items: center; gap: 12px; padding: 24px calc(24px + env(safe-area-inset-right)) 24px calc(24px + env(safe-area-inset-left)); background: radial-gradient(ellipse at 50% 40%, #3a1868, #170828 75%); text-align: center; }
+      #desktop-only .do-blob { position: relative; width: 84px; height: 72px; margin-bottom: 6px; transform-origin: 50% 100%; animation: ld-bounce 0.9s cubic-bezier(0.3, 0, 0.4, 1) infinite; }
+      #desktop-only .do-blob i { position: absolute; inset: 0; border-radius: 50% 50% 44% 44% / 60% 60% 40% 40%; background: radial-gradient(circle at 34% 30%, #ffd1ea, #ff4fa3 45%, #a3125e); box-shadow: inset -8px -10px 18px rgba(80, 0, 40, 0.45); }
+      #desktop-only .do-blob b { position: absolute; top: 34%; width: 9px; height: 13px; border-radius: 50%; background: #1a0820; }
+      #desktop-only .do-blob b:first-of-type { left: 32%; } #desktop-only .do-blob b:last-of-type { right: 32%; }
+      #desktop-only .do-title { font-size: 44px; font-weight: 400; }
+      #desktop-only .do-msg { margin: 4px 0 0; font: 400 26px/1.1 'Lilita One', system-ui, sans-serif; color: var(--cream); -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill; }
+      #desktop-only .do-msg strong { font-weight: 400; color: var(--gold); }
+      #desktop-only .do-sub { margin: 0; max-width: 320px; font: 700 14px/1.4 'Nunito', system-ui, sans-serif; color: #cbb9ea; }
+      #desktop-only .do-anyway { margin-top: 14px; padding: 8px 16px; border: 2px solid #5a3a8a; border-radius: 999px; background: transparent; color: #a993cc; font: 800 13px/1 'Nunito', system-ui, sans-serif; }
+      @media (orientation: portrait) { body.touch:not(.in-lobby) #rotate { display: grid; } }
+      @media (max-height: 820px) { #help { font-size: 11px; line-height: 1.5; } #rivals { font-size: 12px; } .rival { padding-top: 1px; padding-bottom: 2px; } }
+      @media (max-width: 760px) { #me { width: calc(100vw - 32px); } #rivals { display: none; } #help { font-size: 11px; } }
+
+      /* ---------- ⚙️ opciones ---------- */
+      #gear { position: fixed; top: 12px; right: 16px; z-index: 20; width: 46px; height: 46px; border-radius: 14px; border: 3px solid var(--ink); background: var(--panel2); box-shadow: 0 4px 0 var(--ink); cursor: pointer; display: grid; place-items: center; padding: 0; transition: transform 0.08s, box-shadow 0.08s; }
+      #gear span { font-size: 24px; line-height: 1; transition: transform 0.35s cubic-bezier(0.3, 1.5, 0.5, 1); }
+      #gear:hover span { transform: rotate(60deg); }
+      #gear:active { transform: translateY(4px); box-shadow: 0 0 0 var(--ink); }
+      body.in-lobby #gear, body.opts-open #gear { display: none; }
+      .op-modal { position: fixed; inset: 0; z-index: 40; display: none; place-items: center; padding: 16px; background: rgba(12, 4, 24, 0.6); }
+      .op-modal.show { display: grid; animation: lb-fade 0.15s ease-out; }
+      .op-box { position: relative; width: min(580px, 100%); max-height: calc(100vh - 32px); overflow: auto; padding: 18px 22px 18px; border-radius: 24px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 8px 0 var(--ink); font: 700 13.5px/1.5 'Nunito', system-ui, sans-serif; color: #e9defa; animation: lb-pop 0.22s cubic-bezier(0.3, 1.5, 0.5, 1); scrollbar-width: thin; }
+      .op-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+      .op-head h2 { margin: 0; font: 400 30px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--cream); -webkit-text-stroke: 6px var(--ink); paint-order: stroke fill; transform: rotate(-1.5deg); }
+      .op-arena { padding: 2px 10px; border-radius: 8px; background: var(--gold); color: var(--ink); border: 2px solid var(--ink); font: 900 11px/1.4 'Nunito', system-ui, sans-serif; letter-spacing: 1px; text-transform: uppercase; transform: rotate(2deg); }
+      .op-arena:empty { display: none; }
+      .op-x { margin-left: auto; width: 36px; height: 36px; border-radius: 11px; border: 3px solid var(--ink); background: var(--panel2); color: var(--cream); font: 900 16px/1 'Nunito', system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 0 var(--ink); }
+      .op-box button { font-family: 'Nunito', system-ui, sans-serif; }
+      .op-tabs { display: flex; gap: 6px; margin-bottom: 14px; flex-wrap: wrap; }
+      .op-tabs button, .op-chips button { padding: 6px 12px; border-radius: 12px; border: 3px solid var(--ink); background: var(--panel2); color: var(--cream); font-weight: 800; font-size: 13px; cursor: pointer; box-shadow: 0 3px 0 var(--ink); transition: transform 0.06s, box-shadow 0.06s; }
+      .op-tabs button { font-size: 14px; padding: 7px 14px; }
+      .op-tabs button:hover, .op-chips button:hover { background: #432570; }
+      .op-tabs button.on, .op-chips button.on { background: var(--gold); color: var(--ink); }
+      .op-tabs button:active, .op-chips button:active { transform: translateY(3px); box-shadow: 0 0 0 var(--ink); }
+      .op-box section { display: none; }
+      .op-box section.show { display: block; animation: lb-fade 0.12s ease-out; }
+      .op-box h3 { margin: 14px 0 6px; font: 400 18px/1.1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--cream); }
+      .op-box section > h3:first-child { margin-top: 0; }
+      .op-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      .op-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+      .op-row > label { font: 400 18px/1.1 'Lilita One', system-ui, sans-serif; color: var(--cream); }
+      .op-custom { padding: 2px 8px; border-radius: 8px; border: 2px dashed #a995cc; color: #cbb9ea; font-size: 12px; }
+      .op-hint { margin: 8px 0 8px; font-size: 12px; color: #a995cc; }
+      .op-status { margin: 4px 0 0; font-size: 12px; color: #cbb9ea; }
+      .op-keys { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 14px; }
+      .op-key { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 4px 4px 10px; border-radius: 12px; background: rgba(255,255,255,0.04); }
+      .op-key button { min-width: 74px; padding: 4px 10px; border-radius: 9px; border: 2px solid var(--ink); background: var(--cream); color: var(--ink); font: 900 14px/1.3 'Nunito', system-ui, sans-serif; box-shadow: 0 3px 0 var(--ink); cursor: pointer; }
+      .op-key button:hover { background: #fff; transform: translateY(-1px); }
+      .op-key button.wait { background: var(--gold); animation: op-blink 0.8s ease-in-out infinite; }
+      @keyframes op-blink { 50% { filter: brightness(1.25); transform: scale(1.04); } }
+      .op-help { font-size: 12.5px; line-height: 1.75; color: #e9defa; }
+      .op-help kbd, .op-dev kbd { display: inline-block; min-width: 18px; text-align: center; background: var(--cream); color: var(--ink); border-radius: 5px; padding: 0 5px; font: 800 11px/1.5 'Nunito', system-ui, sans-serif; box-shadow: 0 2px 0 var(--ink); border: 1.5px solid var(--ink); margin: 0 1px; }
+      .op-dev { margin-top: 12px; padding-top: 10px; border-top: 2px dashed rgba(255,255,255,0.12); font-size: 11.5px; line-height: 1.8; color: #a995cc; }
+      .op-dev #mode { margin-left: 4px; }
+      .op-vol { display: flex; align-items: center; gap: 12px; }
+      .op-vol input { flex: 1; accent-color: var(--gold); height: 22px; cursor: pointer; }
+      .op-vol b { min-width: 52px; text-align: right; font: 400 18px/1 'Lilita One', system-ui, sans-serif; color: var(--cream); }
+      .op-foot { display: flex; gap: 10px; margin-top: 18px; }
+      .op-foot button { flex: 1; padding: 10px 12px; border-radius: 14px; border: 3px solid var(--ink); cursor: pointer; box-shadow: 0 4px 0 var(--ink); font: 800 14px/1.1 'Nunito', system-ui, sans-serif; transition: transform 0.06s, box-shadow 0.06s; }
+      .op-foot button:active { transform: translateY(4px); box-shadow: 0 0 0 var(--ink); }
+      .op-lobby { background: var(--panel2); color: var(--cream); }
+      .op-back { background: var(--gold); color: var(--ink); font-size: 16px !important; }
+      @media (max-width: 560px) { .op-keys { grid-template-columns: 1fr; } }
+      /* la tarjeta del tutorial va arriba al medio: si no entra al lado del panel de la gelatina, abajo */
+      @media (max-width: 1240px) { #tutorial { top: auto !important; bottom: 16px; } }
+      body.touch #gear { display: none; } /* en celular está el botón ☰ */
+
+      /* ---------- modo por equipos: marcador arriba al medio, cartel de ronda, franja en la tabla ---------- */
+      #teams { display: none; position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 12; align-items: center; gap: 10px; font-family: 'Nunito', system-ui, sans-serif; }
+      body.teams:not(.in-lobby) #teams { display: flex; }
+      .tm-side { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-radius: 14px; border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); color: #fff; }
+      .tm-side.a { background: #2f8bff; } .tm-side.b { background: #ff3b4f; }
+      .tm-side b { font: 400 18px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 1px; -webkit-text-stroke: 4px var(--ink); paint-order: stroke fill; }
+      .tm-side em { font: 400 24px/1 'Lilita One', system-ui, sans-serif; font-style: normal; min-width: 18px; text-align: center; -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill; }
+      .tm-dots { display: flex; gap: 3px; }
+      .tm-dots i { width: 9px; height: 9px; border-radius: 50%; border: 2px solid var(--ink); background: rgba(0,0,0,0.35); }
+      .tm-dots i.on { background: #fff; }
+      .tm-mid { display: flex; flex-direction: column; align-items: center; padding: 3px 12px 4px; border-radius: 12px; background: var(--panel); border: 3px solid var(--ink); box-shadow: 0 4px 0 var(--ink); color: var(--cream); }
+      .tm-clock { font: 400 20px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 1px; }
+      .tm-round { font-weight: 900; font-size: 10px; letter-spacing: 1px; color: #a995cc; text-transform: uppercase; }
+      .tm-note { position: absolute; top: calc(100% + 10px); left: 50%; transform: translateX(-50%); white-space: nowrap; padding: 3px 12px; border-radius: 10px; background: rgba(18,5,31,0.8); color: var(--cream); font-weight: 800; font-size: 13px; }
+      .tm-note:empty { display: none; }
+      body.teams #toast { top: 96px; }
+      #tm-banner { position: fixed; left: 50%; top: 32%; z-index: 26; transform: translate(-50%, -50%) scale(0.6) rotate(-3deg); opacity: 0; pointer-events: none; display: flex; flex-direction: column; align-items: center; gap: 6px; transition: opacity 0.2s, transform 0.35s cubic-bezier(0.3, 1.6, 0.5, 1); }
+      #tm-banner.show { opacity: 1; transform: translate(-50%, -50%) scale(1) rotate(-3deg); }
+      #tm-banner b { padding: 10px 26px 12px; border-radius: 20px; background: var(--tc); border: 4px solid var(--ink); box-shadow: 0 7px 0 var(--ink); font: 400 44px/1 'Lilita One', system-ui, sans-serif; color: #fff; -webkit-text-stroke: 8px var(--ink); paint-order: stroke fill; white-space: nowrap; }
+      #tm-banner.intro b, #tm-banner.big b { font-size: 56px; }
+      #tm-banner small { padding: 3px 14px; border-radius: 10px; background: var(--panel); border: 3px solid var(--ink); color: var(--cream); font: 400 22px/1.1 'Lilita One', system-ui, sans-serif; }
+      #tm-count { position: fixed; left: 50%; top: 42%; z-index: 27; transform: translate(-50%, -50%); pointer-events: none; opacity: 0; font: 400 150px/1 'Lilita One', system-ui, sans-serif; color: #fff; -webkit-text-stroke: 16px var(--ink); paint-order: stroke fill; text-shadow: 0 12px 0 var(--ink); }
+      #tm-count.show { animation: tm-pop 0.95s cubic-bezier(0.3, 1.6, 0.5, 1) forwards; }
+      #tm-count.go { color: var(--gold); font-size: 120px; }
+      @keyframes tm-pop { 0% { opacity: 0; transform: translate(-50%, -50%) scale(2.2); } 18% { opacity: 1; transform: translate(-50%, -50%) scale(1); } 75% { opacity: 1; transform: translate(-50%, -50%) scale(0.96); } 100% { opacity: 0; transform: translate(-50%, -50%) scale(0.8); } }
+      .rival.tA { box-shadow: inset 5px 0 0 #2f8bff; } .rival.tB { box-shadow: inset 5px 0 0 #ff3b4f; }
+      /* elegir modo (después de ¡A JUGAR!) */
+      .lb-mwide { width: min(560px, 100%); padding-top: 26px; }
+      .lb-mcards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 6px 0 4px; }
+      .lb-mbox .lb-mcard { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 16px 12px 14px; background: var(--panel2); color: var(--cream); text-align: center; }
+      .lb-mbox .lb-mcard:hover, .lb-mbox .lb-mcard:focus-visible { background: #432570; outline: none; transform: translateY(-3px); box-shadow: 0 7px 0 var(--ink); }
+      .lb-mcard b { font: 400 22px/1.05 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; -webkit-text-stroke: 5px var(--ink); paint-order: stroke fill; color: #fff; }
+      .lb-mcard small { font: 700 12.5px/1.4 'Nunito', system-ui, sans-serif; color: #cbb9ea; }
+      .lb-mico { display: flex; gap: 4px; font-size: 38px; line-height: 1; height: 44px; align-items: center; }
+      .lb-mico i { width: 34px; height: 30px; border-radius: 50% 50% 44% 44% / 60% 60% 40% 40%; border: 3px solid var(--ink); }
+      .lb-mico i.tA { background: #2f8bff; } .lb-mico i.tB { background: #ff3b4f; }
+      @media (max-width: 520px) { .lb-mcards { grid-template-columns: 1fr; } }
+      body:not(.is-admin) .op-dev { display: none; } /* atajos de prueba: sólo en la página del admin */
+      .lb-recs { display: none; margin: 12px 0 0; padding: 10px 14px 8px; border-radius: 14px; background: rgba(255,255,255,0.05); border: 2px dashed rgba(255,255,255,0.12); }
+      .lb-recs.show { display: block; }
+      .lb-recs > b { display: block; font: 400 16px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--gold); margin-bottom: 6px; }
+      .lb-recs ol { margin: 0; padding-left: 22px; font: 800 13px/1.7 'Nunito', system-ui, sans-serif; color: #e9defa; }
+      .lb-recs li span { display: inline-block; max-width: 70%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+      .lb-recs li b { float: right; font-family: 'Lilita One', system-ui, sans-serif; font-weight: 400; color: var(--cream); }
+      /* ---------- logo BOUNCY BLOBS (src/logo.js): letras de caramelo que rebotan en cadena; la O es un blob ---------- */
+      .bb-logo { display: inline-flex; flex-wrap: wrap; justify-content: center; align-items: flex-end; gap: 0 0.3em; font-family: 'Lilita One', 'Trebuchet MS', system-ui, sans-serif; font-weight: 400; font-style: normal; line-height: 1; letter-spacing: 0; transform: rotate(-2deg); }
+      .bb-w { display: inline-flex; align-items: flex-end; }
+      .bb-l { display: inline-block; position: relative; color: var(--c); -webkit-text-stroke: 0.13em var(--ink); paint-order: stroke fill; text-shadow: 0 0.085em 0 var(--ink); transform-origin: 50% 100%; transform: rotate(var(--r)); animation: bb-bounce 2.4s cubic-bezier(0.3, 0, 0.4, 1) infinite; animation-delay: calc(var(--i) * 0.09s); }
+      @keyframes bb-bounce {
+        0%, 50%, 100% { transform: translateY(0) rotate(var(--r)) scale(1, 1); }
+        10% { transform: translateY(-0.22em) rotate(var(--r)) scale(0.9, 1.12); }
+        22% { transform: translateY(0) rotate(var(--r)) scale(1.16, 0.84); }
+        31% { transform: translateY(-0.05em) rotate(var(--r)) scale(0.95, 1.05); }
+        40% { transform: translateY(0) rotate(var(--r)) scale(1.03, 0.97); }
+      }
+      .bb-o { width: 0.78em; height: 0.74em; margin: 0 -0.05em 0.03em 0.01em; border-radius: 50% 50% 44% 44% / 60% 60% 40% 40%; background: radial-gradient(circle at 34% 30%, #fff 0, var(--c) 42%, color-mix(in srgb, var(--c) 62%, #000)); border: 0.075em solid var(--ink); box-shadow: 0 0.085em 0 var(--ink); }
+      .bb-o i { position: absolute; top: 30%; width: 0.11em; height: 0.17em; border-radius: 50%; background: var(--ink); animation: bb-blink 4s infinite; transform-origin: 50% 50%; }
+      .bb-o i:first-child { left: 29%; } .bb-o i:last-child { right: 29%; }
+      @keyframes bb-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(0.1); } }
+      .lb-logo h1 .bb-logo { transform: rotate(-2deg); }
+      @media (prefers-reduced-motion: reduce) { .bb-l, .bb-o i { animation: none; } }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="me"></div>
+    <div id="rivals"></div>
+    <div id="popups"></div>
+    <div id="toast"></div>
+    <div id="lobby"></div>
+    <div id="rotate"><div class="rt-phone">📱</div><b data-i18n="rotate.title"></b><span data-i18n="rotate.sub"></span></div>
+    <div id="loading" class="show">
+      <div class="ld-title"></div>
+      <div class="ld-blob"><i></i><b></b><b></b></div>
+      <div class="ld-shadow"></div>
+      <div class="ld-text" data-i18n="loading"></div>
+    </div>
+    <script type="module" src="/src/boot.js"></script>
+  </body>
+</html>

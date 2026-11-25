@@ -1,0 +1,10 @@
+node_modules
+dist
+perf
+escenarios
+.env
+.env.*
+!.env.example
+*.log
+.git
+instrucciones_vps.md

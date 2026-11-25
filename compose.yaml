@@ -1,0 +1,46 @@
+# Producción (VPS compartido): el juego + su propia base. Ver DEPLOY.md.
+# Sólo "web" se conecta a la red compartida "edge" (la usa Caddy, con el alias bouncyblobs_web);
+# la base queda en la red privada del proyecto y no publica puertos.
+name: bouncyblobs
+services:
+  web:
+    build: .
+    image: bouncyblobs-web:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://bouncyblobs:${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}@db:5432/bouncyblobs
+      PORT: "8080"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      internal: {}
+      edge:
+        aliases: [bouncyblobs_web]
+
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: bouncyblobs
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: bouncyblobs
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bouncyblobs -d bouncyblobs"]
+      interval: 10s
+      timeout: 4s
+      retries: 10
+
+networks:
+  internal:
+    name: bouncyblobs_internal
+  edge:
+    external: true
+
+volumes:
+  db:
+    name: bouncyblobs_db

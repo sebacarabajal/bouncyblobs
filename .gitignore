@@ -1,0 +1,9 @@
+node_modules/
+dist/
+perf/
+.env
+.env.*
+!.env.example
+*.log
+# notas internas del servidor (no van al repositorio público)
+instrucciones_vps.md
