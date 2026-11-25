@@ -23,6 +23,11 @@ export class Pickups {
     this.scene = scene;
     this.list = [];
     this.timer = 0;
+    this.nextId = 0;
+    // en línea, el navegador sólo dibuja: las bolitas las crea y las come el servidor (remote = true)
+    this.remote = false;
+    this.onSpawn = null; // (p) => … el servidor avisa a los jugadores
+    this.onEaten = null; // (p, j) => …
     // blanca: bolita lechosa, mate con un barniz suave (no tan clara: si no, el brillo del escenario la quema
     // y se ve como un círculo plano que brilla)
     const geo = new THREE.SphereGeometry(PR, 22, 16);
@@ -53,13 +58,37 @@ export class Pickups {
   }
 
   // cada bolita guarda su posición/escala en un Object3D suelto (no está en la escena): "mesh" por compatibilidad
-  _make(pos, vel, power = null) {
+  _make(pos, vel, power = null, id = null) {
     const m = new THREE.Object3D();
     m.position.copy(pos);
     const shadow = { visible: false, position: new THREE.Vector3(), scale: 1 };
-    const p = { mesh: m, shadow, vel: vel.clone(), state: 'fall', t: 0, age: 0, immune: null, phase: Math.random() * 6, target: null, mass: CONFIG.pickupMass, power };
+    const p = { id: id ?? ++this.nextId, mesh: m, shadow, vel: vel.clone(), state: 'fall', t: 0, age: 0, immune: null, phase: Math.random() * 6, target: null, mass: CONFIG.pickupMass, power };
     this.list.push(p);
+    this.onSpawn?.(p);
     return p;
+  }
+
+  // en línea: bolita que creó el servidor (con su id) · estado 'rest' si ya estaba en el piso
+  addRemote({ id, x, y, z, vx = 0, vy = 0, vz = 0, power = null, rest = false }) {
+    if (this.list.some((p) => p.id === id)) return;
+    const p = this._make(_v.set(x, y, z), new THREE.Vector3(vx, vy, vz), power, id);
+    if (rest) { p.state = 'rest'; p.mesh.position.y = 0; p.t = 1; }
+  }
+
+  // en línea: el servidor dice que j se la comió (se ve cómo la absorbe)
+  eatRemote(id, j) {
+    const p = this.list.find((x) => x.id === id);
+    if (!p || p.state === 'eaten') return;
+    if (!j) { p.gone = true; this.list.splice(this.list.indexOf(p), 1); return; }
+    p.state = 'eaten'; p.target = j; p.t = 0; p.shadow.visible = false;
+  }
+
+  // para mandarle a un jugador que entra todo lo que hay en el piso
+  snapshotList() {
+    return this.list.filter((p) => p.state !== 'eaten').map((p) => ({
+      id: p.id, x: +p.mesh.position.x.toFixed(2), y: +p.mesh.position.y.toFixed(2), z: +p.mesh.position.z.toFixed(2),
+      vx: +p.vel.x.toFixed(2), vy: +p.vel.y.toFixed(2), vz: +p.vel.z.toFixed(2), power: p.power, rest: p.state === 'rest',
+    }));
   }
 
   // escribe las bolitas en los dibujos instanciados
@@ -129,7 +158,7 @@ export class Pickups {
 
   step(dt, arena, jellies, onEat) {
     this.timer -= dt;
-    if (this.timer <= 0) {
+    if (!this.remote && this.timer <= 0) {
       const sc = (arena.pickupScale ?? 1) * CONFIG.pickupAmount / 100; // arenas grandes: más gelatinitas · cantidad del admin
       this.timer = (CONFIG.pickupInterval / Math.max(sc, 0.05)) * (0.6 + Math.random() * 0.8); // con 0% igual se vuelve a fijar seguido
       if (this.list.length < CONFIG.pickupMax * sc) this.spawnFromSky(arena);
@@ -146,7 +175,7 @@ export class Pickups {
         const k = Math.min(1, p.t / 0.15);
         m.position.lerp(j.pos, k * 0.5);
         m.scale.setScalar(Math.max(0.01, 1 - k));
-        if (k >= 1) { onEat(j, p.mass, p.power); this._remove(p); this.list.splice(i, 1); }
+        if (k >= 1) { if (!this.remote) onEat(j, p.mass, p.power); this._remove(p); this.list.splice(i, 1); }
         continue;
       }
 
@@ -196,6 +225,7 @@ export class Pickups {
           p.target = j;
           p.t = 0;
           p.shadow.visible = false;
+          this.onEaten?.(p, j);
           break;
         }
       }

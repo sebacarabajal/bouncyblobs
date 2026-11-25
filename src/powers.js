@@ -42,6 +42,7 @@ export class OilSlicks {
     m.receiveShadow = true;
     this.scene.add(m);
     this.list.push({ mesh: m, x, z, t: CONFIG.oilLife, owner, age: 0 });
+    this.onSpawn?.(x, z, owner); // el servidor avisa a los jugadores
   }
 
   clear() {

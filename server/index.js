@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPool, migrate } from './db.js';
 import { createApi } from './api.js';
+import { createRealtime } from './realtime.js';
 
 const env = process.env;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'dist');
@@ -32,7 +33,8 @@ function serveFile(res, file, cache) {
 const pool = env.DATABASE_URL ? createPool(env.DATABASE_URL) : null;
 if (pool) await migrate(pool);
 else console.warn('[server] sin DATABASE_URL: el juego anda, pero sin analíticas ni récords');
-const api = createApi({ pool, env });
+const realtime = createRealtime({ env }); // salas en tiempo real (WebSocket /ws)
+const api = createApi({ pool, env, realtime });
 
 const server = http.createServer(async (req, res) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -58,5 +60,6 @@ const server = http.createServer(async (req, res) => {
   serveFile(res, file, cache);
 });
 
+server.on('upgrade', (req, socket, head) => { if (!realtime.upgrade(req, socket, head)) socket.destroy(); });
 server.listen(PORT, '0.0.0.0', () => console.log(`[server] Bouncy Blobs en el puerto ${PORT}`));
-for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { server.close(() => process.exit(0)); pool?.end(); setTimeout(() => process.exit(0), 3000).unref(); });
+for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, () => { realtime.close(); server.close(() => process.exit(0)); pool?.end(); setTimeout(() => process.exit(0), 3000).unref(); });

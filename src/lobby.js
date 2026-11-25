@@ -466,7 +466,8 @@ export class Lobby {
       tattoo.getContext('2d').drawImage(this.pad, 0, 0);
     }
     const gameMode = mode.mode === 'teams' ? 'teams' : 'ffa';
-    save({ name, shape: this.shape, color: this.colorHex, tattoo: empty ? null : this.pad.toDataURL('image/png'), mode: mode.tutorial ? load().mode : gameMode });
-    this.onStart({ name, shape: this.shape, color: this.colorHex, tattoo, tutorial: !!mode.tutorial, mode: gameMode });
+    const tattooURL = empty ? null : this.pad.toDataURL('image/png');
+    save({ name, shape: this.shape, color: this.colorHex, tattoo: tattooURL, mode: mode.tutorial ? load().mode : gameMode });
+    this.onStart({ name, shape: this.shape, color: this.colorHex, tattoo, tattooURL, tutorial: !!mode.tutorial, mode: gameMode });
   }
 }

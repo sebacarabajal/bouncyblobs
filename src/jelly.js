@@ -921,6 +921,7 @@ export class Jelly {
   // frustum (opcional): si la gelatina está fuera de cámara no se recalcula su forma (ahorra mucho con 16)
   render(alpha, others, frustum = null) {
     this.renderPos.lerpVectors(this.prevPos, this.pos, alpha);
+    if (this.visOff) this.renderPos.add(this.visOff); // en línea: corrección del servidor, deslizada suave
     this.root.position.copy(this.renderPos);
     if (this.dead) return;
     if (frustum) {
@@ -1047,6 +1048,13 @@ export class Jelly {
   }
 
   // ---------------------------------------------------------------- vida
+  // en línea: los demás blobs los mueve el servidor (cuerpo "cinemático": empuja al tuyo pero nada lo empuja)
+  setRemote(on) {
+    if (this.remote === on) return;
+    this.remote = on;
+    this.body.setBodyType(on ? RAPIER.RigidBodyType.KinematicPositionBased : RAPIER.RigidBodyType.Dynamic, true);
+  }
+
   kill() {
     this.dead = true;
     this.impaledT = 0;

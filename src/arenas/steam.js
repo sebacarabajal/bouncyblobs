@@ -1061,6 +1061,25 @@ export function buildSteam(scene, world) {
     preStep(dt, t) {
       this._t = t;
     },
+    // en línea: el servidor manda el estado de los pozos y los pinchos (lo demás depende sólo del reloj)
+    getState() {
+      return {
+        h: HOLES.map((h) => [h.state === 'closed' ? 0 : h.state === 'warn' ? 1 : 2, +h.timer.toFixed(2), +h.btnCd.toFixed(2)]),
+        p: PADS.map((p) => +p.y.toFixed(3)),
+      };
+    },
+    setState(st, t) {
+      HOLES.forEach((h, i) => {
+        const [k, timer, cd] = st.h[i] || [0, 0, 0];
+        const ns = ['closed', 'warn', 'open'][k];
+        if (ns === 'warn' && h.state === 'closed') h.button.press = 0.35; // se ve el botón apretado
+        h.state = ns; h.timer = timer; h.btnCd = cd;
+        const open = ns === 'open';
+        if (open !== h.open) { h.open = open; h.col.setEnabled(!open); }
+      });
+      PADS.forEach((p, i) => { if (st.p[i] != null) p.y = st.p[i]; });
+      for (const v of vents) v.state = ventState(v, t);
+    },
     postStep(dt, game) {
       const t = game.time;
       // sierras (el sonido depende de qué tan cerca estás)
@@ -1073,14 +1092,9 @@ export function buildSteam(scene, world) {
           if (ss.st === 'rise') { sfx.sawRise(vol); game.shake(0.25 * vol); }
           sw.prev = ss.st;
         }
-        if (ss.st === 'warn' && Math.random() < dt * 30) fx.burst(sw.at((Math.random() * 2 - 1) * sw.half * 0.9, 0.1), ORANGE, 1, 4, UP, 0.04, true);
         if (ss.st !== 'rise' && ss.st !== 'out' && ss.st !== 'sink') continue;
         const top = ss.y + sw.R;
         if (top <= 0.2) continue;
-        // chispas donde el disco toca el piso
-        const half = Math.sqrt(Math.max(0, sw.R * sw.R - ss.y * ss.y));
-        if (Math.random() < dt * 40) fx.burst(sw.at(ss.u - half, 0.08), ORANGE, 2, 7, sw.dir.clone().negate().setY(0.6), 0.05, true);
-        if (Math.random() < dt * 20) fx.burst(sw.at(ss.u + half, 0.08), ORANGE, 1, 5, sw.dir.clone().setY(0.6), 0.04, true);
         const c = sw.at(ss.u, ss.y);
         for (const j of game.jellies) {
           if (j.dead || j.impaled) continue;
@@ -1181,6 +1195,15 @@ export function buildSteam(scene, world) {
       }
     },
     update(t, dt) {
+      // chispas de las sierras (sólo decoración: las arma cada navegador, no viajan por la red)
+      for (const sw of SAWS) {
+        const ss = sw.state(t);
+        if (ss.st === 'warn' && Math.random() < dt * 30) fx.burst(sw.at((Math.random() * 2 - 1) * sw.half * 0.9, 0.1), ORANGE, 1, 4, UP, 0.04, true);
+        if ((ss.st !== 'rise' && ss.st !== 'out' && ss.st !== 'sink') || ss.y + sw.R <= 0.2) continue;
+        const half = Math.sqrt(Math.max(0, sw.R * sw.R - ss.y * ss.y));
+        if (Math.random() < dt * 40) fx.burst(sw.at(ss.u - half, 0.08), ORANGE, 2, 7, sw.dir.clone().negate().setY(0.6), 0.05, true);
+        if (Math.random() < dt * 20) fx.burst(sw.at(ss.u + half, 0.08), ORANGE, 1, 5, sw.dir.clone().setY(0.6), 0.04, true);
+      }
       updateSpikes(dt);
       for (const g of gearsFloor) g.m.rotation.z = t * g.w;
       for (const g of bigGears) g.g.rotateZ(g.w * dt);

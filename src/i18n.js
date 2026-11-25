@@ -8,6 +8,8 @@ export const LANGS = { es: 'Español', en: 'English', pt: 'Português' };
 
 const DICT = {
   es: {
+    'net.offline': 'Sin conexión con el servidor: juegas contra bots',
+    'net.connecting': 'Buscando una sala…', 'net.lost': 'Se perdió la conexión con el servidor', 'net.full': 'Esa sala está llena', 'net.fail': 'No se pudo conectar con el servidor. Prueba de nuevo en un momento.',
     'tm.go': '¡YA!',
     'lb.records': "🏆 Récords de la semana",
     'mode.title': '¿Cómo quieres jugar?', 'mode.back': 'Volver',
@@ -89,6 +91,8 @@ Bolitas <span style="color:#ffd21a">amarillas</span>: poderes y armas (aceite y 
     'tut.play': '¡A JUGAR!', 'tut.again': 'Repetir', 'tut.menu': 'Volver al menú',
   },
   en: {
+    'net.offline': 'No server connection: playing against bots',
+    'net.connecting': 'Finding a room…', 'net.lost': 'Lost connection to the server', 'net.full': 'That room is full', 'net.fail': 'Could not connect to the server. Try again in a moment.',
     'tm.go': 'GO!',
     'lb.records': "🏆 This week's records",
     'mode.title': 'How do you want to play?', 'mode.back': 'Back',
@@ -165,6 +169,8 @@ Ram the <span style="color:#ff5a5a">red buttons</span> to open the pits<br />
     'tm.yes': '🎓 Do the tutorial', 'tm.no': 'Just play',
   },
   pt: {
+    'net.offline': 'Sem conexão com o servidor: você joga contra bots',
+    'net.connecting': 'Procurando uma sala…', 'net.lost': 'A conexão com o servidor caiu', 'net.full': 'Essa sala está cheia', 'net.fail': 'Não foi possível conectar ao servidor. Tente de novo em instantes.',
     'tm.go': 'JÁ!',
     'lb.records': "🏆 Recordes da semana",
     'mode.title': 'Como você quer jogar?', 'mode.back': 'Voltar',

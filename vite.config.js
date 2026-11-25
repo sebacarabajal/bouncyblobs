@@ -101,7 +101,12 @@ const devApi = () => ({
       console.warn('[dev-api] sin base de datos (' + e.message + '): el juego anda, pero sin analíticas. Levantala con: docker compose -f compose.dev.yml up -d');
       pool.end().catch(() => {}); pool = null;
     }
-    const api = createApi({ pool, env });
+    // salas en tiempo real: el mismo servidor de producción (server/realtime.js), enganchado al de Vite
+    const { createRealtime } = await import('./server/realtime.js');
+    const realtime = createRealtime({ env });
+    server.httpServer?.on('upgrade', (req, socket, head) => { realtime.upgrade(req, socket, head); });
+    server.httpServer?.on('close', () => realtime.close());
+    const api = createApi({ pool, env, realtime });
     server.middlewares.use(async (req, res, next) => { if (!(await api(req, res))) next(); });
   },
 });

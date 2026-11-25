@@ -8,7 +8,6 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import GUI from 'lil-gui';
 
 import { CONFIG } from './config.js';
-import { Jelly, R } from './jelly.js';
 import { Input } from './input.js';
 import { fx } from './fx.js';
 import { sfx } from './sfx.js';
@@ -17,29 +16,22 @@ import { Adaptive } from './adaptive.js';
 import { loadSoundOverrides } from './sfx.js';
 import { buildSoundFolder } from './sfxadmin.js';
 import { Options } from './options.js';
-import { Teams } from './teams.js';
+import { TeamsHUD } from './teams.js';
+import { Sim, STEP, ARENAS, BUILDERS } from './game/sim.js';
 import { IS_ADMIN } from './env.js';
 import { telemetry } from './telemetry.js';
-import { Pickups } from './pickups.js';
 import { CameraRig, CAM_PRESETS } from './camera.js';
-import { POWERS, OilSlicks } from './powers.js';
+import { POWERS } from './powers.js';
 import { Lobby } from './lobby.js';
 import { Slices } from './slice.js';
-import { Projectiles } from './projectiles.js';
 import { PerfMonitor } from './perf.js';
 import { Q, ORDER, isTouch, saveQuality, refreshGlass } from './quality.js';
 import { TouchControls } from './touch.js';
 import { t, translate, onLang, getLang } from './i18n.js';
 import { preloadBackdrops, onLateAsset } from './arenas/common.js';
-import { buildCyber } from './arenas/cyber.js';
-import { buildSteam } from './arenas/steam.js';
-import { buildCrystal } from './arenas/crystal.js';
-import { buildTutorial, DUMMY_HOME } from './arenas/tutorial.js';
 import { Tutorial } from './tutorial.js';
+import { Online } from './net/online.js';
 
-const STEP = 1 / 120;
-const ARENAS = { cyber: buildCyber, steam: buildSteam, crystal: buildCrystal };
-const BUILDERS = { ...ARENAS, tutorial: buildTutorial }; // el tutorial no aparece en los selectores de arena
 const ARENA_KEYS = { Digit8: 'cyber', Digit9: 'steam', Digit0: 'crystal' }; // 1-4 quedan para las armas
 
 // los parámetros de prueba de la URL y los ajustes del admin sólo valen en la página del admin (ver env.js)
@@ -148,166 +140,41 @@ async function main() {
 
   fx.init(scene, camera);
 
-  // ------------------------------------------------------------ física
-  const world = new RAPIER.World({ x: 0, y: CONFIG.gravity, z: 0 });
-  world.timestep = STEP;
-
-  const defs = [
-    { name: t('you'), color: '#ff4fa3', shape: 'round', brow: 0.35, isPlayer: true, spawn: [0, 0, 5] },
-    { name: 'Limón', color: '#ffc21a', shape: 'round', brow: 0.45, spawn: [-6, 0, -3] },
-    { name: 'Celeste', color: '#2fc8ff', shape: 'tall', brow: -0.15, spawn: [6, 0, -3] },
-    { name: 'Uva', color: '#a24dff', shape: 'drop', brow: 0.5, spawn: [0, 0, -8] },
-    { name: 'Lima', color: '#7be22a', shape: 'bean', brow: 0.2, spawn: [-8, 0, 4] },
-    { name: 'Mandarina', color: '#ff7a1a', shape: 'drop', brow: 0.55, spawn: [8, 0, 4] },
-    { name: 'Arándano', color: '#3d6bff', shape: 'tall', brow: 0.3, spawn: [-4, 0, 9] },
-    { name: 'Menta', color: '#22e0b4', shape: 'box', brow: 0.4, spawn: [4, 0, 9] },
-    { name: 'Frutilla', color: '#ff2f4f', shape: 'round', brow: 0.5, spawn: [-10, 0, -8] },
-    { name: 'Kiwi', color: '#9bd400', shape: 'box', brow: 0.1, spawn: [10, 0, -8] },
-    { name: 'Coco', color: '#f2ece0', shape: 'bean', brow: 0.3, spawn: [-11, 0, 0] },
-    { name: 'Mora', color: '#c0137a', shape: 'box', brow: 0.6, spawn: [11, 0, 0] },
-    // las 4 de abajo sólo juegan en arenas grandes (arena.players, ej. Steampunk = 16)
-    { name: 'Chocolate', color: '#7a4428', shape: 'tall', brow: 0.4, spawn: [-14, 0, 6] },
-    { name: 'Durazno', color: '#ffb18a', shape: 'bean', brow: 0.2, spawn: [14, 0, 6] },
-    { name: 'Ciruela', color: '#4b1d84', shape: 'bean', brow: 0.5, spawn: [-14, 0, -6] },
-    { name: 'Pistacho', color: '#b8c97a', shape: 'drop', brow: 0.3, spawn: [14, 0, -6] },
-  ];
-  const jellies = defs.map((d) => new Jelly({
-    ...d,
-    scene,
-    world,
-    spawn: new THREE.Vector3(d.spawn[0], R + 0.05, d.spawn[2]),
-    yaw: d.isPlayer ? 0 : Math.atan2(-d.spawn[0], -d.spawn[2]),
-  }));
-  const player = jellies[0];
-  const faces = new FaceBatch(scene, jellies); // caras de todas en pocos dibujos
-  // modo de juego: 'ffa' (todos contra todos, se reaparece) o 'teams' (Azul vs Rojo por rondas, ver teams.js)
+  // ------------------------------------------------------------ la partida (game/sim.js)
+  // En modo local (tutorial) la partida corre acá; en línea la corre el servidor (ver net/).
+  let shake = 0;
   let gameMode = 'ffa';
-  const teams = new Teams(jellies, {
-    onNewRound: () => {
-      // ronda nueva: todos vuelven a su mitad de la arena, con masa 1 (los puntos siguen)
-      pickups.clear(); oil.clear(); shots.clear();
-      for (const j of jellies) if (!j.benched && !(inLobby && j.isPlayer)) j.respawn(spawnPoint(j));
+  const slices = new Slices(scene);
+  const teamsHUD = new TeamsHUD();
+  const sim = new Sim({
+    scene, local: true,
+    hooks: {
+      shake: (a) => { shake = Math.max(shake, a); },
+      slice: (j, normal, along) => slices.cut(j, normal, along),
+      event: (name) => perf.event(name),
+      hit: (att, vic) => tutorial.hit(att, vic),
+      thrown: (j, type) => tutorial.thrown(j, type),
+      spitHit: (owner, j) => tutorial.spitHit(owner, j),
+      ate: (j, power) => tutorial.ate(j, power),
+      matchReset: () => onMatchReset(),
+      teamEvent: (type, d) => {
+        teamsHUD.onEvent(type, d, player.team);
+        if (type === 'count') sfx[d.n > 0 ? 'use' : 'power']();
+        if (type === 'roundEnd') {
+          telemetry.track('round', { round: d.round, win: d.w === player.team ? 1 : 0, draw: d.w < 0 ? 1 : 0 });
+          if (d.series) telemetry.endMatch('series');
+        }
+        if (type === 'seriesStart' && !inLobby) telemetry.startMatch({ mode: 'teams', arena: arenaName, team: player.team, name: player.name });
+      },
     },
   });
-  const isEnemy = (a, b) => teams.isEnemy(a, b);
-  teams.onRoundEnd = (w) => telemetry.track('round', { round: teams.round, win: w === player.team ? 1 : 0, draw: w < 0 ? 1 : 0 });
-  // cada partida al mejor de 5 es una "partida" en las analíticas
-  teams.onSeriesEnd = () => telemetry.endMatch('series');
-  teams.onCount = (n) => (n > 0 ? sfx.use() : sfx.power()); // 3, 2, 1 · ¡YA!
-  teams.onSeriesStart = () => { if (!inLobby) telemetry.startMatch({ mode: 'teams', arena: arenaName, team: player.team, name: player.name }); };
-  const pickups = new Pickups(scene);
-  const oil = new OilSlicks(scene);
-  const slices = new Slices(scene);
-  const shots = new Projectiles(scene, world);
-  shots.friendly = (owner, j) => !teams.isEnemy(owner, j);
-  oil.friendly = (owner, j) => !teams.isEnemy(owner, j);
-
-  // ------------------------------------------------------------ estado de juego
-  let time = 0;
-  let shake = 0;
+  const world = sim.world;
+  const jellies = sim.jellies;
+  const player = sim.player;
+  const { pickups, oil, shots, teams } = sim;
+  const faces = new FaceBatch(scene, jellies); // caras de todas en pocos dibujos
   let arena = null;
-  const _n = new THREE.Vector3();
   const _p = new THREE.Vector3();
-
-  function spawnPoint(j) {
-    if (arena.spawnAt) return arena.spawnAt(j); // tutorial: cada una en su lugar
-    const tp = teams.spawnFor(j); // equipos: formación de cada equipo
-    if (tp) return tp;
-    for (let tries = 0; tries < 60; tries++) {
-      const a = Math.random() * Math.PI * 2, r = 3 + Math.random() * arena.R * 0.45;
-      _p.set(Math.cos(a) * r, 10, Math.sin(a) * r);
-      if (!arena.floorAt(_p.x, _p.z)) continue;
-      if (arena.spawnOk && !arena.spawnOk(_p.x, _p.z)) continue; // lejos de las sierras, pozos, géiseres…
-      if (jellies.every((o) => o === j || o.dead || Math.hypot(o.pos.x - _p.x, o.pos.z - _p.z) > 3.5)) break;
-    }
-    return _p.clone();
-  }
-
-  // Puntos por KO según tamaños: noquear a uno más grande que vos vale más (y a uno chiquito, menos).
-  // pts = koPoints × (masa víctima / masa tuya)^koSizeExp  → x1 vs x4 ≈ 283 · x4 vs x1 ≈ 35
-  const koValue = (killer, victim) => {
-    const f = Math.pow(victim.mass / killer.mass, CONFIG.koSizeExp);
-    return Math.round(CONFIG.koPoints * THREE.MathUtils.clamp(f, 0.25, 10));
-  };
-
-  // El KO se reparte entre quien te pegó (últimos 6 s) y quien abrió la trampa en la que caíste (pozo).
-  // Si son dos distintos, cada uno se lleva la mitad de sus puntos.
-  function creditKO(victim) {
-    // quién lo sacó: el más reciente entre el último golpe (6 s), el último empujón (3 s) y el aceite que pisó (4 s)
-    let by = null, at = -Infinity;
-    for (const [who, when, win] of [[victim.lastHitBy, victim.lastHitTime, 6], [victim.pushBy, victim.pushTime, 3], [victim.slipBy, victim.slipTime, 4]]) {
-      if (who && who !== victim && isEnemy(who, victim) && time - when < win && when > at) { by = who; at = when; }
-    }
-    const killers = by ? [by] : [];
-    const trap = victim.trapBy;
-    if (trap && trap !== victim && isEnemy(trap, victim) && time - victim.trapTime < 3 && !killers.includes(trap)) killers.push(trap);
-    for (const killer of killers) {
-      killer.kos++;
-      const pts = Math.round(koValue(killer, victim) / killers.length);
-      killer.score += pts;
-      const upset = victim.mass / killer.mass >= 1.5;
-      if (!killer.dead) fx.popup(killer.pos.clone().setY(killer.pos.y + 2.4 * killer.size), `+${pts} ${t('pts').toLowerCase()}${upset ? ' 🏆' : ''}`, upset ? '#ffd21a' : '#7dff8a', true);
-    }
-    perf.event('KO');
-    victim.falls++;
-    victim.respawnAt = time + 1.4;
-  }
-
-  // API que usan las arenas para sus peligros
-  const game = {
-    jellies,
-    get time() { return time; },
-    shake(a) { shake = Math.max(shake, a); },
-    splat(j, normal, point, label = '💥') {
-      if (j.dead) return;
-      perf.event('splat');
-      fx.burst(point, j.color, 45, 9, normal, 0.14 * j.size);
-      fx.puddle(point, normal, j.color, 1.4 * j.size);
-      fx.ring(point, normal, j.color, 4);
-      fx.popup(point.clone().setY(point.y + 1.5), label, '#' + j.color.getHexString(), true);
-      sfx.splat();
-      shake = Math.max(shake, CONFIG.shake * 2);
-      j.kill();
-      creditKO(j);
-    },
-    // sierra: la parte al medio
-    slice(j, { normal, along, point }) {
-      if (j.dead) return;
-      perf.event('corte sierra');
-      slices.cut(j, normal, along);
-      fx.popup(point.clone().setY(point.y + 2 * j.size), '🪚', '#' + j.color.getHexString(), true);
-      sfx.slice();
-      shake = Math.max(shake, 0.6);
-      j.kill();
-      creditKO(j);
-      j.respawnAt = time + 3.4; // tiempo para ver cómo quedaste partido
-    },
-    // clavado en pinches: queda pataleando unos segundos y después revienta
-    // t: segundos clavado antes de reventar (los pinches del piso son más rápidos)
-    impale(j, center, inward, t = CONFIG.impaleTime) {
-      if (j.dead || j.impaled) return;
-      perf.event('clavado');
-      j.impale(center, inward, t);
-      j.impaleN = inward.clone();
-      fx.burst(center.clone().addScaledVector(inward, -j.r), j.color, 18, 5, inward, 0.1);
-      sfx.stab();
-      shake = Math.max(shake, 0.5);
-    },
-    hazardHit(j, { vx, vy, vz, stun, dmg = 0, color, sound, point }) {
-      const mult = (1 + (CONFIG.instKnock * j.damage) / 100) / Math.pow(j.mass, 0.35);
-      const k = Math.min(1.8, 0.6 + 0.4 * mult);
-      j.knockback(vx * k, vy, vz * k, stun);
-      if (dmg) j.damage = Math.min(100, j.damage + dmg);
-      if (point) {
-        _n.set(vx, 0, vz).normalize().negate();
-        j.dent(_n, 12, 0.25);
-        fx.burst(point, color, 14, 7, null, 0.08);
-        fx.ring(point, _n.negate(), color, 2.2);
-      }
-      if (sound) sfx[sound](12);
-      shake = Math.max(shake, 0.2);
-    },
-  };
 
   // Dibuja una vez TODA la arena desde arriba con gran angular (con y sin bloom): así se compilan todas las
   // variantes de materiales (sombras, transparencia de las gelatinas) y nada traba la primera vez que entra en cámara.
@@ -327,44 +194,37 @@ async function main() {
   function loadArena(name, warm = true) {
     if (!BUILDERS[name]) return;
     if (name !== 'tutorial') endTutorial();
-    arena?.dispose();
-    perf.event('arena ' + name);
-    arena = BUILDERS[name](scene, world);
     arenaName = name;
     if (name !== 'tutorial') CONFIG.arena = name; // la arena "elegida" sigue siendo la de las partidas
+    sim.mode = gameMode;
+    sim.loadArena(name); // arma la arena y arranca la partida (onMatchReset)
+    arena = sim.arena;
     scene.fog.color.set(arena.fog[0]);
     scene.fog.near = arena.fog[1];
     scene.fog.far = arena.fog[2];
     [bloomPass.strength, bloomPass.radius, bloomPass.threshold] = arena.bloom || [0.5, 0.6, 0.85];
-    fx.floorAt = arena.floorAt;
-    resetMatch();
     document.getElementById('arena').textContent = t('arena.' + name);
     if (warm) warmAll();
   }
 
   // partida de cero en la arena que ya está armada (no la vuelve a construir: así no se traba)
   function resetMatch() {
-    fx.clear();
-    pickups.clear();
-    oil.clear();
+    sim.mode = gameMode;
     slices.clear();
-    shots.clear();
-    // cuántas gelatinas juegan en esta arena (las que sobran quedan en el banco, fuera del juego)
-    const playing = arena.players ?? 12;
-    jellies.forEach((j, i) => {
-      j.kos = 0; j.falls = 0; j.score = 0;
-      j.benched = i >= playing;
-      if (j.benched) { j.kill(); j.respawnAt = Infinity; } else j.respawn(spawnPoint(j));
+    sim.resetMatch();
+  }
+
+  // lo que hay que actualizar en pantalla cuando arranca una partida
+  function onMatchReset() {
+    slices.clear();
+    for (const j of jellies) {
       if (j.rank) j.rank.el.style.display = j.benched ? 'none' : '';
-    });
-    if (gameMode === 'teams' && !arena.tutorial) {
-      teams.start(jellies.filter((j) => !j.benched), arena);
-      for (const j of jellies) if (!j.benched && !j.dead) j.respawn(spawnPoint(j)); // cada uno a su mitad
-    } else teams.stop();
+      j.rank?.el.classList.toggle('tA', j.team === 0);
+      j.rank?.el.classList.toggle('tB', j.team === 1);
+    }
     meEl.style.setProperty('--c', '#' + player.color.getHexString()); // en equipos, tu panel también toma el color del equipo
-    for (const j of jellies) j.rank?.el.classList.toggle('tA', j.team === 0), j.rank?.el.classList.toggle('tB', j.team === 1);
-    player.maxMass = 1;
-    if (!arena.tutorial && !inLobby) telemetry.startMatch({ mode: gameMode, arena: arenaName, team: player.team, name: player.name });
+    if (online.active || connecting) return;
+    if (!sim.arena.tutorial && !inLobby) telemetry.startMatch({ mode: gameMode, arena: arenaName, team: player.team, name: player.name });
     else telemetry.endMatch('arena');
   }
 
@@ -580,7 +440,7 @@ async function main() {
     fuerza: '', vuelo: '', estab: '',
     update() {
       const closing = CONFIG.dashSpeed; // embestida contra alguien quieto
-      const r = hitForce(calc.atacante, calc.victima, 100 - calc.estabilidad, closing, calc.picada, false, false);
+      const r = Sim.hitForce(calc.atacante, calc.victima, 100 - calc.estabilidad, closing, calc.picada, false, false);
       const v = r.K, vy = 3 + v * CONFIG.knockLift;
       const dist = (v * (2 * vy / -CONFIG.gravity)) * 0.8; // vuelo aproximado
       calc.fuerza = `${v.toFixed(1)}${r.raw > CONFIG.knockMax ? ` (topeado, sin tope ${r.raw.toFixed(0)})` : ''} · ${v < 12 ? 'Pum' : v < 20 ? 'FUERTE' : 'BRUTAL'}`;
@@ -695,395 +555,6 @@ async function main() {
     for (const [code, name] of Object.entries(ARENA_KEYS)) input.on(code, () => loadArenaCovered(name));
   }
 
-  // ------------------------------------------------------------ armas
-  // poderes de las bolitas amarillas: se activan solos al agarrarlos
-  function applyPower(j, type) {
-    if (j.dead || j.impaled) return;
-    const P = POWERS[type];
-    switch (type) {
-      case 'turbo': case 'strength':
-        j.buffs[type] = CONFIG.buffTime;
-        break;
-      case 'heal':
-        j.damage = 0;
-        break;
-      case 'feast':
-        j.mass += CONFIG.pickupMass * 10;
-        j.squashVel += 6;
-        break;
-    }
-    fx.popup(j.pos.clone().setY(j.pos.y + 2 * j.size), P.icon, '#ffe14d');
-    fx.ring(j.pos.clone().setY(0.1), new THREE.Vector3(0, 1, 0), new THREE.Color('#ffd21a'), 2.5 * j.size);
-    sfx.use();
-  }
-
-  // armas para tirar: cada una se acumula por separado y tiene su tecla (D aceite · F escupitajo)
-  function giveWeapon(j, type) {
-    j.ammo[type] += type === 'spit' ? CONFIG.spitCharges : CONFIG.oilCharges;
-    const P = POWERS[type];
-    fx.popup(j.pos.clone().setY(j.pos.y + 2 * j.size), `${P.icon}×${j.ammo[type]}`, '#ffe14d');
-    sfx.use();
-  }
-
-  // a quién apuntar: el rival más cercano dentro de un cono adelante (ayuda de puntería)
-  function aimTarget(j, range, cone = 0.82, f = j.facing) {
-    let best = null, bs = Infinity;
-    for (const o of jellies) {
-      if (o === j || o.dead || o.impaled) continue;
-      const dx = o.pos.x - j.pos.x, dz = o.pos.z - j.pos.z, d = Math.hypot(dx, dz);
-      if (d < 1 || d > range) continue;
-      const dot = (dx * f.x + dz * f.z) / d;
-      if (dot < cone) continue;
-      const score = d * (2 - dot);
-      if (score < bs) { bs = score; best = o; }
-    }
-    return best;
-  }
-
-  function throwWeapon(j, type) {
-    if (!(j.ammo[type] > 0) || j.throwCd > 0 || j.dead || j.impaled || j.stunned || j.daze > 0) return;
-    const f = j.facing;
-    const from = j.pos.clone().addScaledVector(f, j.r * 0.9).setY(j.pos.y + j.r * 0.25);
-    if (type === 'spit') {
-      const sp = CONFIG.spitSpeed, g = -9;
-      const tgt = aimTarget(j, CONFIG.spitRange);
-      let aim;
-      if (tgt) {
-        // apunta adonde va a estar (adelanta según su velocidad)
-        const v = tgt.body.linvel();
-        const T = tgt.pos.distanceTo(from) / sp;
-        aim = new THREE.Vector3(tgt.pos.x + v.x * T, tgt.pos.y, tgt.pos.z + v.z * T);
-      } else aim = from.clone().addScaledVector(f, 18).setY(from.y);
-      const dx = aim.x - from.x, dz = aim.z - from.z, dh = Math.hypot(dx, dz) || 1;
-      const T = dh / sp;
-      const vel = new THREE.Vector3((dx / dh) * sp, (aim.y - from.y) / T - 0.5 * g * T, (dz / dh) * sp);
-      shots.spawn('spit', j, from, vel);
-      j.squashVel -= 3; j.stretchVel += 5;
-      j.dent(f.clone().negate(), 4, 0.5);
-      sfx.spit();
-    } else {
-      // aceite: se tira PARA ATRÁS, a pocos metros (sin puntería)
-      const back = f.clone().negate();
-      const behind = j.pos.clone().addScaledVector(back, j.r * 0.9).setY(j.pos.y + j.r * 0.4);
-      const T = 0.4, g = -30;
-      const land = j.pos.clone().addScaledVector(back, j.r + CONFIG.oilThrowDist).setY(0);
-      const vel = new THREE.Vector3((land.x - behind.x) / T, (land.y - behind.y) / T - 0.5 * g * T, (land.z - behind.z) / T);
-      shots.spawn('oil', j, behind, vel);
-      j.dent(back, 4, 0.5);
-      sfx.whoosh();
-    }
-    j.throwCd = 0.35;
-    j.ammo[type]--;
-    tutorial.thrown(j, type);
-  }
-
-  const shotHooks = {
-    hit(p, j) {
-      if (p.kind === 'spit') {
-        // escupitajo: SIEMPRE marea
-        const n = p.vel.clone().setY(0).normalize();
-        const k = CONFIG.spitKnock / Math.sqrt(j.mass);
-        j.knockback(n.x * k, 2, n.z * k, 0.2);
-        j.dizzy(CONFIG.dazeMin + Math.random() * (CONFIG.dazeMax - CONFIG.dazeMin));
-        j.lastHitBy = p.owner; j.lastHitTime = time;
-        j.dent(n.clone().negate(), 10, 0.3);
-        fx.burst(p.pos, p.color, 22, 5, n, 0.09);
-        fx.ring(p.pos, n, p.color, 1.8);
-        sfx.splosh(); sfx.dizzy();
-        tutorial.spitHit(p.owner, j);
-      } else {
-        // aceite que le cae encima: mancha a sus pies
-        oil.spawn(j.pos.x, j.pos.z, p.owner);
-        fx.burst(p.pos, p.color, 16, 4, null, 0.12);
-        sfx.splosh();
-      }
-    },
-    land(p, point, normal) {
-      if (p.kind === 'spit') {
-        fx.burst(point, p.color, 12, 3, normal, 0.07);
-        if (normal.y > 0.6) fx.puddle(point.clone().setY(point.y + 0.02), normal, p.color, 0.5);
-        sfx.splosh();
-      } else {
-        // si pegó contra una pared, la mancha queda al pie
-        if (normal.y < 0.6) point.addScaledVector(normal.setY(0).normalize(), CONFIG.oilRadius * 0.6);
-        if (arena.floorAt(point.x, point.z)) oil.spawn(point.x, point.z, p.owner);
-        fx.burst(point.clone().setY(0.4), p.color, 14, 4, null, 0.12, true);
-        sfx.splosh();
-      }
-    },
-  };
-
-  // ------------------------------------------------------------ golpes entre gelatinas
-  // Toda la fórmula en un lugar (la usa también la calculadora del admin).
-  //   relación de masa = masaAtacante / masaVíctima  → importa la DIFERENCIA, no el tamaño absoluto
-  //   fuerza  = (knockBase + choque × knockScale) × relación^massExp × (1 + instKnock × inestabilidad) × picada × fuerza extra
-  //   estabilidad que saca = instPerHit × (choque/20, máx 1.5) × relación^instMassExp × picada
-  function hitForce(am, vm, dmg, closing, airDash, strong, dazed) {
-    const ratio = am / vm;
-    const air = airDash ? CONFIG.airDashBonus : 1;
-    const raw = (CONFIG.knockBase + closing * CONFIG.knockScale) * Math.pow(ratio, CONFIG.massExp)
-      * (1 + (CONFIG.instKnock * dmg) / 100) * (dazed ? 1.25 : 1) * air * (strong ? CONFIG.strengthMul : 1);
-    const K = Math.min(CONFIG.knockMax, raw);
-    const loss = Math.min(60, Math.round(CONFIG.instPerHit * Math.min(1.5, closing / 20) * Math.pow(ratio, CONFIG.instMassExp) * air));
-    return { K, loss, raw };
-  }
-
-  function tryHit(att, vic, n) {
-    if (!att.dashing || vic.dead || !isEnemy(att, vic)) return;
-    const closing = att.vBefore.dot(n) - vic.vBefore.dot(n);
-    if (closing < 6) return;
-    const nh = new THREE.Vector3(n.x, 0, n.z).normalize();
-    const back = nh.clone().negate();
-    const { K, loss } = hitForce(att.mass, vic.mass, vic.damage, closing, att.airDash, att.buffs.strength > 0, vic.daze > 0);
-    const air = att.airDash ? CONFIG.airDashBonus : 1;
-    vic.knockback(nh.x * K, 3 + K * CONFIG.knockLift, nh.z * K, CONFIG.stunBase + K * CONFIG.stunPerForce);
-    vic.damage = Math.min(100, vic.damage + loss);
-    vic.lastHitBy = att;
-    vic.lastHitTime = time;
-    if (K >= 10) { vic.flyUntil = time + 0.9; vic.flyBy = att; } // sale volando: si choca a otro, le pega (carambola)
-    att.dashTimer = 0;
-    const recoil = 4 / Math.sqrt(att.mass);
-    att.knockback(-nh.x * recoil, 3, -nh.z * recoil, 0.12);
-
-    vic.dent(back, K * 1.3, 0.2);
-    att.dent(nh, K * 0.6, 0.3);
-    vic.squashVel -= 3;
-
-    perf.event('golpe');
-    const contact = att.pos.clone().addScaledVector(nh, att.r);
-    fx.burst(contact, vic.color, 10 + (K | 0), K * 0.45, nh, 0.11);
-    fx.burst(contact, att.color, 5, K * 0.3, back, 0.08);
-    fx.ring(contact, nh, new THREE.Color(air > 1 ? '#ffffff' : '#fff2c0'), (1.5 + K * 0.08) * (air > 1 ? 1.5 : 1));
-    // destello en el punto del golpe (tamaño y color según la fuerza); en picada, más grande
-    fx.impact(contact.clone().setY(contact.y + 0.3), K * (air > 1 ? 1.25 : 1));
-
-    // golpe fuerte → muchas chances de dejarlo mareado
-    if (K >= CONFIG.dazeForce && vic.daze <= 0) {
-      const over = (K - CONFIG.dazeForce) / 15;
-      if (Math.random() < Math.min(0.9, 0.5 + over * 0.5)) {
-        vic.dizzy(CONFIG.dazeMin + (CONFIG.dazeMax - CONFIG.dazeMin) * Math.min(1, over));
-        sfx.dizzy();
-      }
-    }
-
-    // golpe fuerte: le saca masa al rival (gelatinitas que salen volando)
-    const lose = Math.min(3, Math.floor(K / 14));
-    for (let i = 0; i < lose && vic.mass - CONFIG.pickupMass >= 1; i++) {
-      vic.mass -= CONFIG.pickupMass;
-      const a = Math.random() * Math.PI * 2;
-      pickups.eject(vic.pos.clone().setY(vic.pos.y + vic.r), new THREE.Vector3(nh.x * 6 + Math.cos(a) * 3, 8 + Math.random() * 4, nh.z * 6 + Math.sin(a) * 3), vic);
-    }
-
-    shake = Math.max(shake, CONFIG.shake * Math.min(1.8, K / 15));
-    sfx.hit(K);
-    tutorial.hit(att, vic);
-  }
-
-  // Carambola: una gelatina que sale volando por un golpe le pega a la que choca como si la embistiera
-  // (misma fórmula de fuerza, con su masa y la velocidad del choque). El KO es de quien empezó todo.
-  function chainHit(src, dst, n, closing) {
-    if (dst === src.flyBy || time < (dst.chainUntil || 0) || !isEnemy(src.flyBy || src, dst)) return;
-    const nh = new THREE.Vector3(n.x, 0, n.z).normalize();
-    const { K, loss } = hitForce(src.mass, dst.mass, dst.damage, closing, false, false, dst.daze > 0);
-    dst.knockback(nh.x * K, 3 + K * CONFIG.knockLift, nh.z * K, CONFIG.stunBase + K * CONFIG.stunPerForce);
-    dst.damage = Math.min(100, dst.damage + loss);
-    dst.lastHitBy = src.flyBy || src;
-    dst.lastHitTime = time;
-    dst.chainUntil = time + 0.4;
-    if (K >= 10) { dst.flyUntil = time + 0.9; dst.flyBy = dst.lastHitBy; } // y puede seguir la cadena
-    // la que venía volando le pasa parte del impulso y frena
-    const v = src.body.linvel();
-    src.body.setLinvel({ x: v.x * 0.45, y: v.y, z: v.z * 0.45 }, true);
-    src.flyUntil = 0;
-    dst.dent(nh.clone().negate(), K * 1.2, 0.2);
-    src.dent(nh, K * 0.6, 0.3);
-    const contact = src.pos.clone().addScaledVector(nh, src.r);
-    fx.burst(contact, dst.color, 8 + (K | 0), K * 0.4, nh, 0.1);
-    fx.ring(contact, nh, new THREE.Color('#fff2c0'), 1.5 + K * 0.08);
-    fx.impact(contact.clone().setY(contact.y + 0.3), K);
-    shake = Math.max(shake, CONFIG.shake * Math.min(1.5, K / 15));
-    sfx.hit(K);
-  }
-
-  const _hn = new THREE.Vector3();
-  function checkHits() {
-    for (let i = 0; i < jellies.length; i++) {
-      for (let k = i + 1; k < jellies.length; k++) {
-        const a = jellies[i], b = jellies[k];
-        if (a.dead || b.dead || a.impaled || b.impaled) continue;
-        const n = _hn.subVectors(b.pos, a.pos); // vector reusado: esto corre 120 veces por segundo por cada par
-        const d = n.length();
-        if (d > a.r + b.r + 0.25 || d < 1e-4) continue;
-        n.divideScalar(d);
-        const aDash = a.dashing, bDash = b.dashing;
-        if (aDash) tryHit(a, b, n);
-        if (bDash) tryHit(b, a, n.clone().negate());
-        if (!aDash && !bDash) {
-          const rel = a.vBefore.dot(n) - b.vBefore.dot(n);
-          if (rel > 7 && time < (a.flyUntil || 0)) chainHit(a, b, n, rel);
-          else if (rel > 7 && time < (b.flyUntil || 0)) chainHit(b, a, n.clone().negate(), rel);
-          else if (rel > 7) sfx.bump(rel);
-          // empujón (sin embestir): el que se mete contra el otro queda anotado como "quien lo empujó"
-          const va = a.vBefore.dot(n), vb = -b.vBefore.dot(n);
-          if (va > 1.5 && va > vb) { if (isEnemy(a, b)) { b.pushBy = a; b.pushTime = time; } }
-          else if (vb > 1.5 && isEnemy(a, b)) { a.pushBy = b; a.pushTime = time; }
-        }
-      }
-    }
-  }
-
-  function checkSplat(j, mag) {
-    if (!CONFIG.wallSplat || j.dead || j.impaled || !j.stunned || mag < CONFIG.splatImpulse) return;
-    _n.copy(j.contact).divideScalar(mag);
-    if (Math.abs(_n.y) > 0.6) return;
-    if (jellies.some((o) => o !== j && !o.dead && o.pos.distanceTo(j.pos) < j.r + o.r + 0.4)) return;
-    game.splat(j, _n.clone(), j.pos.clone().addScaledVector(_n, -j.r));
-  }
-
-  // ------------------------------------------------------------ bots
-  const lookAheadSafe = (x, z, dx, dz, dist) => (arena.safeAt ? arena.safeAt(x + dx * dist, z + dz * dist) : arena.floorAt(x + dx * dist, z + dz * dist));
-
-  // Los bots deciden 30 veces por segundo (no 120): cada uno en un paso distinto, así no piensan todos juntos.
-  // Entre decisiones siguen con el mismo rumbo; saltar/embestir/tirar se hacen una sola vez.
-  // (En una Mac de 2015 los bots eran ~7 ms por frame; en PCs lentas cada frame hace muchos pasos de física.)
-  const BOT_EVERY = 4;
-  let stepN = 0;
-  function botCmd(j, i) {
-    if (!j.ai || (stepN + i) % BOT_EVERY === 0) return botThink(j, STEP * BOT_EVERY);
-    const c = j.ai.cmd;
-    c.jump = false; c.dash = false; c.throw = null;
-    return c;
-  }
-
-  // los bots también usan sus armas
-  function botThink(b, dt) {
-    const ai = (b.ai ||= { t: 0, wx: 0, wz: 0, dashWait: 1 + Math.random() * 2, hold: 0, pounce: 0, cmd: { mx: 0, mz: 0, jump: false, jumpHeld: false, dash: false, sprint: false } });
-    const cmd = ai.cmd;
-    cmd.jump = false; cmd.dash = false; cmd.sprint = false; cmd.throw = null;
-    ai.dashWait -= dt; ai.t -= dt; ai.hold -= dt;
-    const px = b.pos.x, pz = b.pos.z;
-    let mx = 0, mz = 0;
-
-    // gelatinita más cercana
-    let food = null, fd = Infinity;
-    for (const p of pickups.list) {
-      if (p.state === 'eaten') continue;
-      const d = Math.hypot(p.mesh.position.x - px, p.mesh.position.z - pz);
-      if (d < fd) { fd = d; food = p; }
-    }
-    // rival más cercano
-    let tgt = null, td = Infinity;
-    const aggr = CONFIG.botsAggressive || teams.active;
-    for (const o of jellies) {
-      if (o === b || o.dead || !isEnemy(b, o)) continue;
-      const d = Math.hypot(o.pos.x - px, o.pos.z - pz) * (o.isPlayer ? 0.7 : 1);
-      if (d < td) { td = d; tgt = o; }
-    }
-
-    // trampa: si el rival está sobre un pozo y tengo el botón cerca, voy a embestirlo
-    let trap = null;
-    if (aggr && tgt && arena.traps) {
-      for (const tr of arena.traps) {
-        if (!tr.ready()) continue;
-        if (Math.hypot(tgt.pos.x - tr.x, tgt.pos.z - tr.z) < tr.r + 1.5 && Math.hypot(tr.button.x - px, tr.button.z - pz) < 16) { trap = tr; break; }
-      }
-    }
-    const goFood = !trap && food && (!aggr ? fd < 18 : fd < Math.min(8, td * 0.5));
-    if (trap) {
-      const dx = trap.button.x - px, dz = trap.button.z - pz, d = Math.hypot(dx, dz) || 1;
-      mx = dx / d; mz = dz / d;
-      const f = b.facing;
-      if (d < 5 && f.x * mx + f.z * mz > 0.9 && b.dashCd <= 0) cmd.dash = true;
-      else if (d > 8) cmd.sprint = b.energy > 50;
-    } else if (goFood) {
-      const dx = food.mesh.position.x - px, dz = food.mesh.position.z - pz;
-      mx = dx / (fd || 1); mz = dz / (fd || 1);
-      if (!aggr) { mx *= 0.7; mz *= 0.7; }
-      if (fd > 9 && b.energy > 60) cmd.sprint = true;
-    } else if (!aggr || !tgt) {
-      if (ai.t <= 0) {
-        const a = Math.random() * Math.PI * 2, r = Math.random() * arena.R * 0.5;
-        ai.wx = Math.cos(a) * r; ai.wz = Math.sin(a) * r; ai.t = 2 + Math.random() * 3;
-      }
-      const dx = ai.wx - px, dz = ai.wz - pz, d = Math.hypot(dx, dz);
-      if (d > 0.8) { mx = (dx / d) * 0.4; mz = (dz / d) * 0.4; }
-    } else {
-      const dx = tgt.pos.x - px, dz = tgt.pos.z - pz, d = Math.hypot(dx, dz) || 1;
-      mx = dx / d; mz = dz / d;
-      if (d > 12 && b.energy > 60) cmd.sprint = true;
-      const f = b.facing;
-      if (d < 7.5 && d > 1.5 && f.x * mx + f.z * mz > 0.93 && ai.dashWait <= 0 && b.dashCd <= 0 && ai.pounce <= 0) {
-        // a veces salta primero para embestir en picada
-        if (Math.random() < 0.35 && b.grounded) { cmd.jump = true; ai.hold = 0.25; ai.pounce = 0.32; }
-        else { cmd.dash = true; ai.dashWait = 0.8 + Math.random() * 2.2; }
-      }
-      if (tgt.dashing && d < 5 && Math.random() < 0.04) { cmd.jump = true; ai.hold = 0.3; }
-    }
-    // escupitajo: escupe a los que tiene adelante y lejos
-    if (b.ammo.spit > 0 && tgt && b.throwCd <= 0 && aggr) {
-      const dx = tgt.pos.x - px, dz = tgt.pos.z - pz, d = Math.hypot(dx, dz) || 1;
-      const face = (b.facing.x * dx + b.facing.z * dz) / d;
-      if (d > 7 && d < CONFIG.spitRange * 0.8 && face > 0.9 && Math.random() < dt * 1.5) cmd.throw = 'spit';
-    }
-    // aceite: lo tira cuando alguien lo viene persiguiendo de atrás
-    if (b.ammo.oil > 0 && b.throwCd <= 0 && !cmd.throw) {
-      for (const o of jellies) {
-        if (o === b || o.dead || !isEnemy(b, o)) continue;
-        const dx = o.pos.x - px, dz = o.pos.z - pz, d = Math.hypot(dx, dz) || 1;
-        if (d < 3 || d > 14) continue;
-        const behind = (b.facing.x * dx + b.facing.z * dz) / d < -0.6;
-        const v = o.body.linvel();
-        const chasing = -(v.x * dx + v.z * dz) / d > 4; // se me acerca rápido
-        if (behind && chasing && Math.random() < dt * 3) { cmd.throw = 'oil'; break; }
-      }
-    }
-    if (ai.pounce > 0) {
-      ai.pounce -= dt;
-      if (ai.pounce <= 0) { cmd.dash = true; ai.dashWait = 1 + Math.random() * 2; }
-    }
-
-    // destrabarse: encimado sobre otro (o debajo), o queriendo avanzar sin moverse → sale hacia un costado y salta.
-    // (antes se quedaban congelados: con el rival justo arriba/abajo, "ir hacia él" da una dirección casi nula)
-    let stack = null;
-    for (const o of jellies) {
-      if (o === b || o.dead) continue;
-      const h = Math.hypot(o.pos.x - px, o.pos.z - pz);
-      if (h < (b.r + o.r) * 0.75 && Math.abs(b.pos.y - o.pos.y) > Math.min(b.r, o.r) * 0.6) { stack = o; break; }
-    }
-    const v = b.body.linvel(), sp = Math.hypot(v.x, v.z);
-    ai.stuck = Math.hypot(mx, mz) > 0.3 && sp < 0.6 ? (ai.stuck || 0) + dt : Math.max(0, (ai.stuck || 0) - dt * 2);
-    if ((stack || ai.stuck > 1) && !(ai.escapeT > 0)) {
-      let ex = stack ? px - stack.pos.x : 0, ez = stack ? pz - stack.pos.z : 0;
-      const el = Math.hypot(ex, ez);
-      if (el < 0.2) { const a = Math.random() * Math.PI * 2; ex = Math.cos(a); ez = Math.sin(a); } else { ex /= el; ez /= el; }
-      ai.ex = ex; ai.ez = ez; ai.escapeT = 0.8; ai.stuck = 0;
-      if (b.grounded || (stack && b.pos.y > stack.pos.y)) { cmd.jump = true; ai.hold = 0.15; }
-    }
-    if (ai.escapeT > 0) { ai.escapeT -= dt; mx = ai.ex; mz = ai.ez; cmd.dash = false; cmd.sprint = false; }
-
-    // no tirarse al vacío: mirar adelante
-    const ml = Math.hypot(mx, mz);
-    if (ml > 0.05) {
-      const ux = mx / ml, uz = mz / ml, ahead = 2.5 + b.r;
-      if (!lookAheadSafe(px, pz, ux, uz, ahead)) {
-        let fixed = false;
-        for (const ang of [0.8, -0.8, 1.6, -1.6]) {
-          const c = Math.cos(ang), s = Math.sin(ang);
-          const rx = ux * c - uz * s, rz = ux * s + uz * c;
-          if (lookAheadSafe(px, pz, rx, rz, ahead)) { mx = rx * ml; mz = rz * ml; fixed = true; break; }
-        }
-        if (!fixed) { mx = -px; mz = -pz; }
-        if (!trap) cmd.dash = false;
-      }
-    }
-    const rc = Math.hypot(px, pz);
-    if (rc > arena.R - 3 && !trap) { const k = ((rc - (arena.R - 3)) / 3) * 1.2; mx -= (px / rc) * k; mz -= (pz / rc) * k; }
-    const l = Math.hypot(mx, mz);
-    if (l > 1) { mx /= l; mz /= l; }
-    cmd.mx = mx; cmd.mz = mz; cmd.jumpHeld = ai.hold > 0;
-    return cmd;
-  }
-
   // ------------------------------------------------------------ tutorial
   // Arena chiquita, el jugador y una gelatina de práctica que no hace nada: espera en la diana, lo mira y, si la
   // sacás de lugar, vuelve sola caminando despacito (y se le resetea la estabilidad, así no sale volando lejos).
@@ -1094,20 +565,6 @@ async function main() {
     onMenu: () => { if (tutorial.step) telemetry.track('tutorial', { state: 'skip', step: tutorial.i + 1 }); openLobby(); },
   });
   tutorial.onStep = (i, id) => telemetry.track('tutorial', id ? { state: 'step', step: `${i + 1} ${id}` } : { state: 'done' });
-  const stillCmd = { mx: 0, mz: 0, jump: false, jumpHeld: false, dash: false, sprint: false, throw: null };
-  function dummyThink(j) {
-    const dx = DUMMY_HOME.x - j.pos.x, dz = DUMMY_HOME.z - j.pos.z, d = Math.hypot(dx, dz);
-    const settled = j.sinceHit > 1.5 && j.daze <= 0 && !j.stunned;
-    if (settled) j.damage = 0;
-    if (settled && d > 0.8) {
-      const k = Math.min(0.45, d * 0.2) / d;
-      stillCmd.mx = dx * k; stillCmd.mz = dz * k;
-    } else {
-      stillCmd.mx = stillCmd.mz = 0;
-      if (settled && !player.dead) j.targetYaw = Math.atan2(player.pos.x - j.pos.x, player.pos.z - j.pos.z);
-    }
-    return stillCmd;
-  }
   player.onAction = (kind) => tutorial.action(kind);
   async function startTutorial() {
     telemetry.track('tutorial', { state: 'start' });
@@ -1125,84 +582,13 @@ async function main() {
   }
 
   // ------------------------------------------------------------ loop
-  const onEat = (j, m, power) => {
-    tutorial.ate(j, power);
-    if (power) {
-      fx.burst(j.pos.clone().setY(j.pos.y + j.r * 0.5), new THREE.Color('#ffd21a'), 8, 3, null, 0.07);
-      sfx.power();
-      if (POWERS[power].throw) giveWeapon(j, power);
-      else applyPower(j, power);
-      return;
-    }
-    j.feed(m);
-    sfx.gulp();
-    fx.burst(j.pos.clone().setY(j.pos.y + j.r * 0.5), new THREE.Color('#ffffff'), 4, 2.5, null, 0.06);
-  };
-
   function fixedStep(doSkin = true) {
-    time += STEP;
     const pc = input.command();
     input.consumeEdges(pc);
     input.mashCount = 0; // (ya no se acorta el mareo apretando teclas)
     [pc.mx, pc.mz] = rig.toWorld(pc.mx, pc.mz); // flechas relativas a la cámara
-    arena.preStep(STEP, time);
-    oil.step(STEP, jellies, time);
-    for (const j of jellies) {
-      if (j.justSlipped) {
-        j.justSlipped = false;
-        fx.popup(j.pos.clone().setY(j.pos.y + 1.8 * j.size), '🛢️', '#c8b27a');
-        sfx.slip();
-      }
-      if (!j.dead) j.score += CONFIG.alivePoints * STEP;
-    }
-    let pt = performance.now();
-    const tick = (key) => { const n = performance.now(); perf.add(key, n - pt); pt = n; };
-    stepN++;
-    for (let i = 0; i < jellies.length; i++) {
-      const j = jellies[i];
-      const cmd = teams.frozen ? stillCmd : j.isPlayer ? pc : j.dummy ? dummyThink(j) : botCmd(j, i); // equipos: quietos hasta el ¡YA!
-      j.control(STEP, cmd);
-      j.throwCd = Math.max(0, j.throwCd - STEP);
-      if (cmd.throw) throwWeapon(j, cmd.throw);
-    }
-    tick('bots');
-    world.step();
-    tick('physics');
-    const mags = jellies.map((j) => j.postStep(STEP));
-    checkHits();
-    jellies.forEach((j, i) => checkSplat(j, mags[i]));
-    tick('hits');
-    arena.postStep(STEP, game);
-    tick('arena');
-    pickups.step(STEP, arena, jellies, onEat);
-    shots.step(STEP, jellies, shotHooks);
-    tick('pickups');
-    for (const j of jellies) {
-      if (!j.dead && j.pos.y < -14) {
-        fx.popup(j.pos.clone().setY(-2), '💀', '#' + j.color.getHexString(), true);
-        sfx.ko();
-        j.kill();
-        creditKO(j);
-      }
-      if (j.impaled) {
-        j.impaledT -= STEP;
-        if (Math.random() < STEP * 6) fx.burst(j.pos.clone().setY(j.pos.y - j.r * 0.3), j.color, 1, 1, null, 0.07); // gotea
-        if (j.impaledT <= 0) {
-          // ¡revienta!
-          const n = j.impaleN || new THREE.Vector3(0, 1, 0);
-          fx.burst(j.pos, j.color, 40, 9, n, 0.13 * j.size);
-          fx.puddle(new THREE.Vector3(j.pos.x, 0.02, j.pos.z), new THREE.Vector3(0, 1, 0), j.color, 1.6 * j.size);
-          fx.popup(j.pos.clone().setY(j.pos.y + 1.5), '💥', '#' + j.color.getHexString(), true);
-          sfx.pop();
-          shake = Math.max(shake, 0.4);
-          j.kill();
-          creditKO(j);
-        }
-      }
-      if (j.dead && time > j.respawnAt && teams.canRespawn(j)) j.respawn(spawnPoint(j));
-      if (doSkin) j.skin(STEP);
-    }
-    tick('skinSim');
+    if (online.active) { online.step(pc, doSkin); return; }
+    sim.step((j) => (j === player ? pc : null), { doSkin, perfAdd: (k, ms) => perf.add(k, ms) });
   }
 
   // la arena se arma recién al salir de la pantalla de inicio (con la pantalla de carga encima)
@@ -1214,6 +600,7 @@ async function main() {
     // "auto" arranca en el nivel que corresponde al aparato y baja solo si hace falta
     onStart(look) {
       inLobby = false;
+      player.away = false;
       input.enabled = true;
       document.body.classList.remove('in-lobby');
       player.name = look.name;
@@ -1226,26 +613,106 @@ async function main() {
       player.rank.n.textContent = look.name;
       if (look.tutorial) { gameMode = 'ffa'; startTutorial(); return; }
       gameMode = look.mode === 'teams' ? 'teams' : 'ffa';
-      // arranca la partida de cero (si la arena ya está armada, sólo se reinicia: sin pantalla de carga)
-      if (CONFIG.arena === arenaName) resetMatch(); else loadArenaCovered(CONFIG.arena);
-      rig.reset();
-      toast(t('toast.welcome', { name: look.name }));
+      // las partidas son en línea: entrar a una sala del servidor
+      goOnline(look);
     },
   });
   const openLobby = () => {
     endTutorial();
     if (inLobby) return;
     telemetry.endMatch('lobby');
+    if (online.active) { online.leave(); afterOnline(); }
     inLobby = true;
     input.enabled = false;
     input.keys.clear();
     document.body.classList.add('in-lobby');
     player.kill();
-    player.respawnAt = Infinity; // no reaparece hasta que arranques
+    player.away = true; // fuera de la partida hasta que arranques (los bots siguen jugando de fondo)
+    player.respawnAt = Infinity;
     rig.set(CAM_PRESETS[2]);
     lobby.open();
   };
   input.on('KeyP', openLobby);
+
+  // ------------------------------------------------------------ en línea (salas del servidor, ver net/online.js)
+  let connecting = false;
+  const joinRoom = params.get('room'); // el admin entra a una sala elegida (desde el panel de salas)
+  const online = new Online(sim, {
+    slice: (j, normal, along) => slices.cut(j, normal, along),
+    shake: (a) => { shake = Math.max(shake, a); },
+    teamEvent: (type, d) => {
+      teamsHUD.onEvent(type, d, player.team);
+      if (type === 'count') sfx[d.n > 0 ? 'use' : 'power']();
+      if (type === 'roundEnd') telemetry.track('round', { round: d.round, win: d.w === player.team ? 1 : 0, draw: d.w < 0 ? 1 : 0 });
+    },
+    roster: () => refreshRank(),
+    lost: () => { toast(t('net.lost')); telemetry.endMatch('lost'); afterOnline(); openLobby(); },
+  });
+
+  // nombres y colores de la tabla (en línea cambian cuando entra o sale alguien)
+  function refreshRank() {
+    for (const j of jellies) {
+      if (!j.rank) continue;
+      j.rank.n.textContent = j.name;
+      j.rank.el.style.setProperty('--c', '#' + j.color.getHexString());
+      j.rank.el.style.display = j.benched ? 'none' : '';
+      j.rank.el.classList.toggle('tA', j.team === 0);
+      j.rank.el.classList.toggle('tB', j.team === 1);
+      j.rank.el.classList.toggle('human', !!j.human && j !== player);
+    }
+    meEl.style.setProperty('--c', '#' + player.color.getHexString());
+  }
+
+  // a quién mira la cámara cuando te sacaron en equipos: el compañero vivo con más puntos
+  function spectateTarget() {
+    if (!online.active) return teams.spectate(player);
+    if (!player.dead || player.team == null || !online.tm?.active) return null;
+    let best = null;
+    for (const j of jellies) if (j !== player && !j.dead && !j.benched && j.team === player.team && (!best || j.score > best.score)) best = j;
+    return best;
+  }
+
+  async function goOnline(look) {
+    connecting = true;
+    loadingText.textContent = t('net.connecting');
+    loadingEl.classList.add('show');
+    await nextFrame(); await nextFrame();
+    try {
+      // la arena se arma acá también (para dibujarla y para que tu blob choque con ella); por ahora todas las salas son Steampunk
+      if (arenaName !== 'steam') {
+        const keep = gameMode; gameMode = 'ffa';
+        loadArena('steam', false);
+        gameMode = keep;
+        await warmAll(true);
+      }
+      await online.connect({ mode: gameMode, look: { name: look.name, color: look.color, shape: look.shape, brow: player.browBase, tattoo: look.tattooURL }, room: joinRoom });
+      player.away = false;
+      refreshRank();
+      rig.reset();
+      telemetry.startMatch({ mode: gameMode, arena: 'steam', team: player.team, name: player.name });
+      toast(t('toast.welcome', { name: look.name }));
+      coverFrames = 8;
+      adaptive.holdFor(3);
+    } catch (e) {
+      afterOnline();
+      if (e.message === 'full') { loadingEl.classList.remove('show'); toast(t('net.full')); openLobby(); return; }
+      // el servidor no responde: se juega igual, contra bots y sin conexión (mejor que quedarse afuera)
+      telemetry.track('net_fail', { reason: String(e.message).slice(0, 20) });
+      if (arenaName !== CONFIG.arena) await loadArenaCovered(CONFIG.arena); else { resetMatch(); coverFrames = 8; }
+      player.away = false;
+      rig.reset();
+      toast(t('net.offline'));
+    } finally {
+      connecting = false;
+    }
+  }
+
+  // al salir de la sala: la partida local vuelve (bots de fondo detrás del menú)
+  function afterOnline() {
+    online.stop();
+    gameMode = 'ffa';
+    if (arena) { resetMatch(); refreshRank(); }
+  }
 
   // ---- celular / tablet: controles en pantalla (también si el primer toque es con el dedo)
   let touchUI = null;
@@ -1297,6 +764,7 @@ async function main() {
     // después de un trabón se hacen varios pasos seguidos para alcanzar: la piel (sólo visual) se
     // simula en los 2 primeros nada más, así un trabón no arrastra a los siguientes frames
     for (let k = 0; acc >= STEP; k++) { fixedStep(k < 2); acc -= STEP; perf.t.steps++; }
+    online.sendInput(); // en línea: tus teclas al servidor (una vez por frame)
     perf.lap('sim');
     const alpha = acc / STEP;
     // las gelatinas fuera de cámara no recalculan su forma (cámara del frame anterior, con margen)
@@ -1309,13 +777,13 @@ async function main() {
     oil.update(dt);
     slices.update(dt);
     shots.update(dt);
-    arena.update(time, dt);
+    arena.update(sim.time, dt);
 
     // cámara: sigue al jugador y se aleja un poco cuando crece
     // muerto: la cámara se queda mirando donde caíste (no se va al centro)
     if (inLobby) camFocus.set(0, 0, 0);
     else if (!player.dead) camFocus.copy(player.renderPos).multiplyScalar(CONFIG.camCenter).setY(0); // 1 = tu gelatina en el centro
-    else if (teams.spectate(player)) camFocus.lerp(_p.copy(teams.spectate(player).renderPos).setY(0), 1 - Math.exp(-4 * dt)); // equipos: miras a un compañero
+    else if (spectateTarget()) camFocus.lerp(_p.copy(spectateTarget().renderPos).setY(0), 1 - Math.exp(-4 * dt)); // equipos: miras a un compañero
     else camFocus.lerp(_p.set(player.pos.x, 0, player.pos.z), 1 - Math.exp(-3 * dt)); // se acerca a donde moriste
     const desired = _p.copy(camFocus);
     if (inLobby) rig.tYaw += dt * 0.06; // de fondo: la arena girando despacito
@@ -1326,7 +794,11 @@ async function main() {
     sun.target.position.copy(rig.target);
 
     tutorial.update(dt);
-    teams.update(inLobby ? 0 : dt, player);
+    {
+      const ts = online.active ? online.teamState() : teams.state();
+      const watch = spectateTarget();
+      teamsHUD.update(dt, ts, ts?.active && player.dead && ts.phase === 'play' ? t('tm.waiting', { name: watch ? watch.name : '…' }) : '');
+    }
 
     // HUD
     {

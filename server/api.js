@@ -100,7 +100,7 @@ async function ingest(pool, req, body) {
           await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, 'perf', JSON.stringify({ fps, p95: num(d.p95, 0, 1000), target: num(d.target, 0, 500), res: num(d.res, 0, 2) })]);
           break;
         }
-        case 'tutorial': case 'round': case 'mode_pick': {
+        case 'tutorial': case 'round': case 'mode_pick': case 'net_fail': {
           const data = {};
           for (const [k, v] of Object.entries(d).slice(0, 8)) data[str(k, 20)] = typeof v === 'number' ? v : str(String(v), 40);
           await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, e.k, JSON.stringify(data)]);
@@ -135,12 +135,17 @@ async function records(pool, mode, period) {
 }
 
 // devuelve true si atendió el pedido (si no, sigue el resto: archivos estáticos, Vite…)
-export function createApi({ pool, env }) {
+export function createApi({ pool, env, realtime = null }) {
   return async function api(req, res) {
     const url = new URL(req.url, 'http://x');
     if (!url.pathname.startsWith('/api/')) return false;
     const ip = String(req.headers['cf-connecting-ip'] || req.socket.remoteAddress || '');
     try {
+      // salas en tiempo real (panel del admin): no necesitan la base
+      if (url.pathname === '/api/admin/rooms') {
+        if (!(await adminUser(req, env))) return send(res, 403, { error: 'sin permiso' }), true;
+        return send(res, 200, { rooms: realtime ? realtime.rooms() : [] }), true;
+      }
       if (!pool) return send(res, 503, { error: 'sin base de datos' }), true;
       if (url.pathname === '/api/t' && req.method === 'POST') {
         if (limited(ip)) return send(res, 429, { error: 'despacio' }), true;

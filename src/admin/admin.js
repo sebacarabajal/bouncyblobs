@@ -223,3 +223,40 @@ $('#range').addEventListener('click', (e) => {
 setInterval(async () => { try { const r = await fetch('/api/admin/live'); if (r.ok) showLive(await r.json()); } catch { /* nada */ } }, 15000);
 setInterval(load, 5 * 60000);
 load();
+
+// ---------------------------------------------------------------- salas en tiempo real (no necesitan la base)
+const modeLabel = { ffa: 'Todos contra todos', teams: 'Equipos' };
+const ago = (ms) => { const m = Math.floor((Date.now() - ms) / 60000); return m < 1 ? 'recién' : m < 60 ? `hace ${m} min` : `hace ${Math.floor(m / 60)} h ${m % 60} min`; };
+function gameURL(roomId) { return (import.meta.env?.DEV ? '/' : '/juego') + '?room=' + encodeURIComponent(roomId); }
+
+async function loadRooms() {
+  const body = $('#roomsBody');
+  try {
+    const r = await fetch('/api/admin/rooms', { cache: 'no-store' });
+    if (r.status === 403) { body.replaceChildren(empty('Sin permiso.')); return; }
+    const { rooms } = await r.json();
+    if (!rooms.length) { body.replaceChildren(empty('No hay salas abiertas. Se abre una cuando alguien entra a jugar.')); return; }
+    rooms.sort((a, b) => b.humans - a.humans);
+    body.replaceChildren(el('div', { class: 'rooms' }, rooms.map((rm) => {
+      const full = rm.humans >= rm.capacity;
+      const ts = rm.team;
+      const bar = el('div', { class: 'bar', title: `${rm.humans} personas · ${rm.bots} bots` },
+        el('i', { style: `width:${(rm.humans / rm.capacity) * 100}%;background:var(--series-1)` }),
+        el('i', { style: `width:${(rm.bots / rm.capacity) * 100}%;background:var(--series-2);margin-left:2px` }));
+      const btn = el('button', { type: 'button' }, full ? 'Sala llena' : '🎮 Entrar a jugar');
+      btn.disabled = full;
+      btn.addEventListener('click', () => window.open(gameURL(rm.id), '_blank'));
+      return el('div', { class: 'room' },
+        el('div', { class: 'top' }, el('b', {}, `Sala ${rm.id}`), el('span', { class: 'pill' }, modeLabel[rm.mode] || rm.mode)),
+        el('div', { class: 'meta' }, `${rm.humans} personas · ${rm.bots} bots · ${rm.alive} vivos · abierta ${ago(rm.created)}`,
+          ts ? ` · ronda ${ts.round} (${ts.wins[0]}–${ts.wins[1]})` : ''),
+        bar,
+        rm.players.length ? el('ul', {}, rm.players.map((p) => el('li', {}, p.name, el('span', {}, ` · ${fmt(p.score)} pts · ${p.kos} KO${p.team != null ? (p.team ? ' · Rojo' : ' · Azul') : ''}`)))) : el('div', { class: 'empty' }, 'Sólo bots (nadie jugando).'),
+        btn);
+    })));
+  } catch {
+    body.replaceChildren(empty('No se pudo leer el estado de las salas.'));
+  }
+}
+loadRooms();
+setInterval(loadRooms, 2000);

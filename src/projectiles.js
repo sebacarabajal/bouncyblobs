@@ -35,6 +35,7 @@ export class Projectiles {
     m.castShadow = true;
     this.scene.add(m);
     this.list.push({ kind, owner, mesh: m, pos: pos.clone(), vel: vel.clone(), size, t: 0, g: spit ? -9 : -30, color: spit ? mat.color.clone() : new THREE.Color('#2a1f12') });
+    this.onSpawn?.(kind, owner, pos, vel); // el servidor avisa a los jugadores
   }
 
   _spitMat() {
