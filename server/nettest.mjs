@@ -1,13 +1,13 @@
 // mide cómo llegan las fotos del servidor (binarias): cada cuánto en el reloj local y cuántos pasos avanza el servidor
 //   node server/nettest.mjs bouncyblobs.com
 import WebSocket from 'ws';
-import { decodeSnap } from '../src/net/protocol.js';
+import { decodeSnap, PROTO } from '../src/net/protocol.js';
 const host = process.argv[2] || '127.0.0.1:8798';
 const url = /\./.test(host) && !host.startsWith('127.') ? `wss://${host}/ws` : `ws://${host}/ws`;
 const ws = new WebSocket(url);
 const arr = [], steps = [];
 let lastT = null, lastS = null, bytes = 0, meta = 0;
-ws.on('open', () => ws.send(JSON.stringify({ t: 'join', mode: 'ffa', look: { name: 'Medidor' } })));
+ws.on('open', () => ws.send(JSON.stringify({ t: 'join', v: PROTO, mode: 'ffa', look: { name: 'Medidor' } })));
 ws.on('message', (raw, isBinary) => {
   bytes += raw.length;
   if (!isBinary) { meta++; return; }

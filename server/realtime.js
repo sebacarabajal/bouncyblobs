@@ -3,6 +3,7 @@
 import { Worker } from 'node:worker_threads';
 import { WebSocketServer } from 'ws';
 import { adminUser } from './auth.js';
+import { PROTO } from '../src/net/protocol.js';
 
 export function createRealtime({ env }) {
   const worker = new Worker(new URL('./game-worker.js', import.meta.url));
@@ -32,7 +33,11 @@ export function createRealtime({ env }) {
       let m;
       try { m = JSON.parse(raw); } catch { return; }
       if (!m || typeof m !== 'object') return;
-      if (m.t === 'join') m.admin = admin;
+      if (m.t === 'join') {
+        // página de otra versión (formato de fotos distinto): que se recargue, en vez de mostrar cualquier cosa
+        if (m.v !== PROTO) { ws.send(JSON.stringify({ t: 'old' })); ws.close(4000, 'old'); return; }
+        m.admin = admin;
+      }
       worker.postMessage({ type: 'msg', cid, m });
     });
     ws.on('close', () => { socks.delete(cid); worker.postMessage({ type: 'close', cid }); });

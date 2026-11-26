@@ -1,11 +1,14 @@
 // Protocolo de las salas (lo comparten el servidor y el navegador). WebSocket en /ws.
 //
 // navegador → servidor (JSON)
-//   {t:'join', mode:'ffa'|'teams', look:{name,color,shape,brow,tattoo}, room?:id}   entrar (room: el admin elige sala)
-//   {t:'in', l:[[paso, mx, mz, flags]…]}   una tecla por paso de física (flags: 1 saltar · 2 correr · 4 saltó · 8 embistió · 16 aceite · 32 chorro)
+//   {t:'join', v:PROTO, mode:'ffa'|'teams', look:{name,color,shape,brow,tattoo}, room?:id}   entrar (room: el admin elige sala)
+//   {t:'in', l:[[paso, mx, mz, flags, golpe?]…], n}   una tecla por paso de física (flags: 1 saltar · 2 correr · 4 saltó · 8 embistió · 16 aceite · 32 chorro)
+//     golpe (opcional, 4 valores más): [bot, nx, nz, choque] = en ese paso tu navegador vio que tu embestida le pegó a ese bot
+//     (el servidor lo acepta si es creíble: ver Sim.applyClaims) · n = cuántos pasos va adelantado tu navegador
 //   {t:'ping', c}
 // servidor → navegador
 //   JSON: {t:'welcome', …} · {t:'roster', list} · {t:'x', step, ev, tm, ar} (eventos y estado de equipos/arena) · {t:'pong'} · {t:'full'}
+//         · {t:'old'} (la página es de otra versión: recargar)
 //   BINARIO (30 por segundo): la foto de la sala → ver encodeSnap / decodeSnap
 //
 // Bots: deciden con anticipación (sim.botLead pasos antes de hacerlo). Cada foto trae sus 2 últimas decisiones
@@ -14,11 +17,14 @@
 // Línea de tiempo: el servidor numera sus pasos (step). Con cada foto dice qué tecla tuya fue la última que aplicó
 // (ack) y cuántos pasos lleva sin teclas nuevas (since): así el navegador sabe EXACTAMENTE a qué paso suyo
 // corresponde la foto (ack + since) y cuántos pasos va adelantado (los que todavía no llegaron al servidor).
+// versión del protocolo: si el navegador tiene una página vieja (cambió el formato de las fotos), el servidor le
+// contesta {t:'old'} y la página se recarga sola
+export const PROTO = 2;
 export const F = { dead: 1, dashing: 2, airDash: 4, sprint: 8, grounded: 16, impaled: 32, out: 64, human: 128 };
 export const SNAP_HZ = 30;
 
 const HEAD = 16; // tipo(1) cant(1) cola(1) repetidas(1) paso(4) ack(4) since(2) reservado(2)
-const BLOB = 52;
+const BLOB = 53;
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 const i16 = (v) => clamp(Math.round(v), -32768, 32767);
@@ -47,9 +53,9 @@ export function encodeSnap(jellies, step) {
     dv.setInt16(o + 14, i16(normYaw(j.yaw) * 10000), true);
     dv.setUint16(o + 16, u16(j.mass * 100), true);
     dv.setUint8(o + 18, u8(j.damage));
-    dv.setUint8(o + 19, u8(j.energy));
-    dv.setUint8(o + 20, u8(j.daze * 20));
-    dv.setUint8(o + 21, u8(j.stun * 50));
+    dv.setUint8(o + 19, u8(j.energy * 2)); // (de a medio punto: el umbral para embestir es exacto)
+    dv.setUint8(o + 20, u8(j.daze * 50)); // (máx 5,1 s)
+    dv.setUint8(o + 21, u8(j.stun * 100)); // (máx 2,55 s; el golpe más fuerte aturde 1,6 s)
     dv.setUint8(o + 22, u8(j.dashTimer * 500));
     dv.setUint8(o + 23, u8(j.buffs.turbo * 4));
     dv.setUint8(o + 24, u8(j.buffs.strength * 4));
@@ -71,6 +77,7 @@ export function encodeSnap(jellies, step) {
     const pl = !j.human && j.plan;
     putPlan(dv, o + 44, pl && pl.length ? pl[pl.length - 1] : null, step);
     putPlan(dv, o + 48, pl && pl.length > 1 ? pl[pl.length - 2] : null, step);
+    dv.setUint8(o + 52, u8((j.dashCd || 0) * 100)); // cuánto le falta para poder volver a embestir
     o += BLOB;
   }
   return buf;
@@ -112,12 +119,12 @@ export function decodeSnap(buf) {
       x: dv.getInt16(o + 2, true) / 100, y: dv.getInt16(o + 4, true) / 100, z: dv.getInt16(o + 6, true) / 100,
       vx: dv.getInt16(o + 8, true) / 100, vy: dv.getInt16(o + 10, true) / 100, vz: dv.getInt16(o + 12, true) / 100,
       yaw: dv.getInt16(o + 14, true) / 10000, mass: dv.getUint16(o + 16, true) / 100, damage: dv.getUint8(o + 18),
-      energy: dv.getUint8(o + 19), daze: dv.getUint8(o + 20) / 20, stun: dv.getUint8(o + 21) / 50, dashTimer: dv.getUint8(o + 22) / 500,
+      energy: dv.getUint8(o + 19) / 2, daze: dv.getUint8(o + 20) / 50, stun: dv.getUint8(o + 21) / 100, dashTimer: dv.getUint8(o + 22) / 500,
       turbo: dv.getUint8(o + 23) / 4, strength: dv.getUint8(o + 24) / 4, oil: dv.getUint8(o + 25), spit: dv.getUint8(o + 26),
       team: dv.getInt8(o + 27), score: dv.getUint32(o + 28, true), kos: dv.getUint16(o + 32, true), falls: dv.getUint16(o + 34, true),
       oilT: dv.getUint8(o + 36) / 100, impaledT: dv.getUint8(o + 37) / 50,
       mx: dv.getInt8(o + 38) / 127, mz: dv.getInt8(o + 39) / 127, cmdFlags: dv.getUint8(o + 40), size: dv.getUint8(o + 41) / 50, windup: dv.getUint8(o + 42) / 500, dazeT: dv.getUint8(o + 43) / 50,
-      p1: getPlan(dv, o + 44, out.step), p2: getPlan(dv, o + 48, out.step),
+      p1: getPlan(dv, o + 44, out.step), p2: getPlan(dv, o + 48, out.step), dashCd: dv.getUint8(o + 52) / 100,
     });
     o += BLOB;
   }

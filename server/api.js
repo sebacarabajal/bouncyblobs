@@ -97,7 +97,16 @@ async function ingest(pool, req, body) {
           const fps = num(d.fps, 0, 500);
           if (fps == null) break;
           await c.query('update sessions set fps_avg = (coalesce(fps_avg, 0) * fps_n + $2) / (fps_n + 1), fps_n = fps_n + 1 where id = $1', [sid, fps]);
-          await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, 'perf', JSON.stringify({ fps, p95: num(d.p95, 0, 1000), target: num(d.target, 0, 500), res: num(d.res, 0, 2) })]);
+          await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, 'perf', JSON.stringify({
+            fps, p95: num(d.p95, 0, 1000), target: num(d.target, 0, 500), res: num(d.res, 0, 2),
+            hz: num(d.hz, 0, 1000), late: num(d.late, 0, 1), cpu: num(d.cpu, 0, 1000), gpu: num(d.gpu, 0, 1000), win: str(d.win, 20),
+          })]);
+          break;
+        }
+        case 'net': { // en línea, cada minuto: ping, correcciones, golpes predichos/fantasma… (ver online.js auditReport)
+          const data = {};
+          for (const [k, v] of Object.entries(d).slice(0, 40)) if (/^[a-zA-Z0-9]{1,12}$/.test(k)) { const n = num(v, -1e7, 1e7); if (n != null) data[k] = n; }
+          await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, 'net', JSON.stringify(data)]);
           break;
         }
         case 'tutorial': case 'round': case 'mode_pick': case 'net_fail': {

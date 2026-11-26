@@ -6,7 +6,7 @@
 import * as THREE from 'three';
 import RAPIER from '@dimforge/rapier3d-compat';
 import { CONFIG } from '../config.js';
-import { Jelly, R } from '../jelly.js';
+import { Jelly, R, setSimStep } from '../jelly.js';
 import { fx } from '../fx.js';
 import { sfx } from '../sfx.js';
 import { Pickups } from '../pickups.js';
@@ -66,6 +66,10 @@ export function hitEffects({ att, vic, contact, nh, K, air = false, dazed = fals
   sfx.hit(K);
 }
 const _hn = new THREE.Vector3();
+const _cn = new THREE.Vector3();
+// golpe visto por el navegador del que pega (applyClaims): hasta cuánto más lejos que tocarse puede estar el bot acá
+const CLAIM_REACH = 1;
+const CLAIM_DEBUG = typeof process !== 'undefined' && !!process.env?.CLAIMDEBUG;
 const STILL = { mx: 0, mz: 0, jump: false, jumpHeld: false, dash: false, sprint: false, throw: null };
 const BOT_EVERY = 4; // los bots deciden 30 veces por segundo (no 120)
 const q127 = (v) => Math.round(Math.max(-1, Math.min(1, v)) * 127) / 127; // (así viaja en la foto: igual en los dos lados)
@@ -83,6 +87,7 @@ export class Sim {
     // anticipación de los bots (en pasos). 0 = deciden y hacen en el mismo paso (jugando solo). En las salas en
     // línea el servidor la sube (ver botPlanned): los navegadores reciben cada decisión antes de que se ejecute.
     this.botLead = 0;
+    this.claimsOk = 0; // golpes de personas a bots que valieron porque los vio su navegador
     this.mode = 'ffa';
     this.arena = null;
     this.arenaName = null;
@@ -380,9 +385,10 @@ export class Sim {
     return { K, loss, raw };
   }
 
-  tryHit(att, vic, n) {
+  // closingIn: la velocidad de choque ya calculada (un golpe que vio el navegador del atacante: applyClaims)
+  tryHit(att, vic, n, closingIn) {
     if (!att.dashing || vic.dead || !this.isEnemy(att, vic)) return;
-    const closing = att.vBefore.dot(n) - vic.vBefore.dot(n);
+    const closing = closingIn ?? att.vBefore.dot(n) - vic.vBefore.dot(n);
     if (closing < 6) return;
     const time = this.time;
     const nh = new THREE.Vector3(n.x, 0, n.z).normalize();
@@ -443,6 +449,28 @@ export class Sim {
     this.hooks.mute?.(true);
     hitEffects(hit, (a) => this.hooks.shake?.(a));
     this.hooks.mute?.(false);
+  }
+
+  // EN LÍNEA, a favor del que pega: si el navegador de una persona vio que su embestida le pegó a un BOT, el golpe
+  // vale (así nunca "le pegás y no pasa nada"), siempre que sea creíble acá: sigue embistiendo, el bot está cerca
+  // (lo que la red pudo correrlo) y el choque no es más fuerte que lo posible. Entre personas decide el servidor.
+  // Va antes que checkHits: si acá también se tocan, el golpe sale con la dirección y fuerza que vio esa persona.
+  applyClaims() {
+    for (const a of this.jellies) {
+      const cl = a.claim;
+      if (!cl) continue;
+      a.claim = null;
+      const v = this.jellies[cl.v];
+      const why = !v || v === a || v.human || v.benched ? 'víctima' : v.dead || v.impaled ? 'muerta' : a.dead || a.impaled ? 'atacante' : !a.dashing ? (a.windup > 0 ? 'cargando' : a.stun > 0 ? 'golpeado' : 'no embiste') : !this.isEnemy(a, v) ? 'equipo' : a.pos.distanceTo(v.pos) > a.r + v.r + CLAIM_REACH ? 'lejos' : null;
+      if (why) { if (CLAIM_DEBUG) console.log('[golpe avisado] rechazado:', why, v && !v.dead ? (a.pos.distanceTo(v.pos) - a.r - v.r).toFixed(2) : ''); continue; }
+      const l = Math.hypot(cl.nx, cl.nz);
+      if (!(l > 0.5)) continue;
+      const n = _cn.set(cl.nx / l, 0, cl.nz / l);
+      const closing = Math.min(cl.c, a.vBefore.length() + v.vBefore.length() + 4);
+      if (!(closing >= 6)) continue;
+      this.tryHit(a, v, n, closing);
+      this.claimsOk++;
+    }
   }
 
   checkHits() {
@@ -558,7 +586,7 @@ export class Sim {
       const dx = trap.button.x - px, dz = trap.button.z - pz, d = Math.hypot(dx, dz) || 1;
       mx = dx / d; mz = dz / d;
       const f = b.facing;
-      if (d < 5 && f.x * mx + f.z * mz > 0.9 && b.dashCd <= 0) cmd.dash = true;
+      if (d < 5 && f.x * mx + f.z * mz > 0.9 && b.dashCd <= 0 && (!T || b.energy >= CONFIG.dashEnergy + 6)) cmd.dash = true;
       else if (d > 8) cmd.sprint = b.energy > 50;
     } else if (goFood) {
       const dx = food.mesh.position.x - px, dz = food.mesh.position.z - pz;
@@ -577,7 +605,9 @@ export class Sim {
       mx = dx / d; mz = dz / d;
       if (d > 12 && b.energy > 60) cmd.sprint = true;
       const f = b.facing;
-      if (d < 7.5 && d > 1.5 && f.x * mx + f.z * mz > 0.93 && ai.dashWait <= 0 && b.dashCd <= 0 && ai.pounce <= 0) {
+      // (en línea, con energía de sobra: si no, al ejecutarlo la energía queda justo en el límite y en un lado sale
+      // y en el otro no)
+      if (d < 7.5 && d > 1.5 && f.x * mx + f.z * mz > 0.93 && ai.dashWait <= 0 && b.dashCd <= 0 && ai.pounce <= 0 && (!T || b.energy >= CONFIG.dashEnergy + 6)) {
         if (Math.random() < 0.35 && b.grounded) { cmd.jump = true; ai.hold = 0.25; ai.pounce = 0.32; } // salta primero: picada
         else { cmd.dash = true; ai.dashWait = 0.8 + Math.random() * 2.2; }
       }
@@ -603,7 +633,7 @@ export class Sim {
     }
     if (ai.pounce > 0) {
       ai.pounce -= dt;
-      if (ai.pounce <= 0) { cmd.dash = true; ai.dashWait = 1 + Math.random() * 2; }
+      if (ai.pounce <= 0) { if (!T || b.energy >= CONFIG.dashEnergy + 6) cmd.dash = true; ai.dashWait = 1 + Math.random() * 2; }
     }
 
     // destrabarse: encimado sobre otro (o debajo), o queriendo avanzar sin moverse → sale hacia un costado y salta
@@ -686,6 +716,7 @@ export class Sim {
     const H = this.hooks;
     this.time += STEP;
     this.stepN++;
+    setSimStep(this.stepN);
     const arena = this.arena, jellies = this.jellies;
     arena.preStep(STEP, this.time);
     this.oil.step(STEP, jellies, this.time);
@@ -709,6 +740,7 @@ export class Sim {
       if (frozen) { cmd = STILL; j.plan = null; } // equipos: quietos hasta el ¡YA!
       else if (!cmd) cmd = j.dummy ? this.dummyThink(j) : this.botLead > 0 ? this.botPlanned(j, i) : this.botCmd(j, i);
       j.lastCmd = cmd; // (se manda a los navegadores: así predicen hacia dónde va cada uno)
+      j.claim = cmd.claim || null; // en línea: "le pegué a ese bot" (lo vio el navegador de esa persona, ver applyClaims)
       H.who?.(j);
       j.control(STEP, cmd);
       j.throwCd = Math.max(0, j.throwCd - STEP);
@@ -719,6 +751,7 @@ export class Sim {
     this.world.step();
     tick('physics');
     const mags = jellies.map((j) => { H.who?.(j); const m = j.postStep(STEP); H.who?.(null); return m; });
+    this.applyClaims();
     this.checkHits();
     jellies.forEach((j, i) => this.checkSplat(j, mags[i]));
     tick('hits');

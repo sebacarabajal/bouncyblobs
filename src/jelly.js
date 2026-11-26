@@ -59,6 +59,17 @@ const angleLerp = (a, b, t) => {
   return a + d * t;
 };
 
+// Azar REPETIBLE para lo que cambia la física (el patinazo en el aceite): sale de (blob, paso, k), así el
+// servidor y cada navegador sacan el mismo número en el mismo paso (con Math.random cada uno patinaba para otro lado)
+let SIM_STEP = 0;
+export function setSimStep(n) { SIM_STEP = n; }
+function stepRand(id, k) {
+  let h = Math.imul((id | 0) + 1, 0x27d4eb2d) ^ Math.imul(SIM_STEP | 0, 0x165667b1) ^ Math.imul(k, 0x9e3779b1);
+  h = Math.imul(h ^ (h >>> 15), 0x85ebca6b);
+  h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
 const _v = new THREE.Vector3();
 const _n = new THREE.Vector3();
 const _sphere = new THREE.Sphere();
@@ -326,12 +337,13 @@ export class Jelly {
     if (slipping && !this.slipActive) {
       // pisó aceite: sale disparado hacia un costado al azar (nunca para atrás) y va girando
       this.slipActive = true;
+      const rid = this.netId ?? this.id, r = (k) => stepRand(rid, k);
       let hs = Math.hypot(vx, vz);
-      let h = hs > 1 ? Math.atan2(vx, vz) : Math.random() * Math.PI * 2;
+      let h = hs > 1 ? Math.atan2(vx, vz) : r(1) * Math.PI * 2;
       hs = Math.max(hs, 5);
       this.slipBase = h;
-      this.slipTurn = (Math.random() < 0.5 ? -1 : 1) * (0.6 + Math.random() * 2.4);
-      h += (Math.random() < 0.5 ? -1 : 1) * (0.3 + Math.random() * 1.1);
+      this.slipTurn = (r(2) < 0.5 ? -1 : 1) * (0.6 + r(3) * 2.4);
+      h += (r(4) < 0.5 ? -1 : 1) * (0.3 + r(5) * 1.1);
       vx = Math.sin(h) * hs; vz = Math.cos(h) * hs;
     } else if (this.oilT <= 0) this.slipActive = false;
     this.stun = Math.max(0, this.stun - dt);
@@ -370,8 +382,11 @@ export class Jelly {
     const dashCost = CONFIG.dashEnergy;
     if (!this.sprinting) this.energy = Math.min(100, this.energy + CONFIG.energyRegen * dt);
     let launch = false;
-    if (cmd.dash && this.dashCd <= 0 && !stunned && this.energy >= dashCost && !(this.windup > 0)) {
-      this.energy -= dashCost;
+    // dashSure (en línea, una persona): su navegador ya la arrancó (sólo avisa las que pudo hacer), así que acá se
+    // le da por buena con un pelito de margen: si no, con la energía justo en el límite, allá salía y acá no
+    const sure = !!cmd.dashSure;
+    if (cmd.dash && (sure ? this.dashCd <= 0.15 && this.energy >= dashCost - 4 : this.dashCd <= 0 && this.energy >= dashCost) && !stunned && !(this.windup > 0)) {
+      this.energy = Math.max(0, this.energy - dashCost);
       if (ml > 0.15) this.dashDir.set(mx / ml, 0, mz / ml);
       else this.dashDir.copy(this.facing);
       this.yaw = this.targetYaw = Math.atan2(this.dashDir.x, this.dashDir.z);

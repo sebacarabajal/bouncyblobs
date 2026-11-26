@@ -169,14 +169,15 @@ class Room {
     // El navegador ajusta su ritmo para que acá esperen 2-3 (ver online.js: timeScale); si igual se juntan muchas
     // (la red se trabó), se descartan las viejas para no quedar atrasado.
     const q = c.queue;
-    let jump = false, dash = false, thr = null;
-    while (q.length > QUEUE_MAX) { const d = q.shift(); jump ||= d.jump; dash ||= d.dash; thr = d.throw || thr; c.ack = d.s; c.drops++; }
+    let jump = false, dash = false, thr = null, claim = null;
+    while (q.length > QUEUE_MAX) { const d = q.shift(); jump ||= d.jump; dash ||= d.dash; thr = d.throw || thr; claim = d.claim || claim; c.ack = d.s; c.drops++; }
     const it = q.shift();
-    if (!it) { c.reps++; c.since++; return { ...c.last, jump, dash, throw: thr }; } // no llegó nada: sigue con la última
+    // (dashSure: el navegador sólo avisa las embestidas que ya arrancó: ver jelly.control)
+    if (!it) { c.reps++; c.since++; return { ...c.last, jump, dash, dashSure: true, throw: thr, claim }; } // no llegó nada: sigue con la última
     c.ack = it.s;
     c.since = 0;
     c.last = { mx: it.mx, mz: it.mz, jumpHeld: it.jumpHeld, sprint: it.sprint };
-    return { ...c.last, jump: it.jump || jump, dash: it.dash || dash, throw: it.throw || thr };
+    return { ...c.last, jump: it.jump || jump, dash: it.dash || dash, dashSure: true, throw: it.throw || thr, claim: it.claim || claim };
   }
 
   tick(dt) {
@@ -265,10 +266,18 @@ function onMessage(cid, m) {
     for (const it of m.l.slice(0, 30)) {
       if (!Array.isArray(it) || !Number.isFinite(it[0]) || it[0] <= (c.queue.length ? c.queue[c.queue.length - 1].s : c.ack)) continue;
       const mx = Number(it[1]) || 0, mz = Number(it[2]) || 0, l = Math.hypot(mx, mz), f = it[3] | 0;
-      c.queue.push({ s: it[0], mx: l > 1 ? mx / l : mx, mz: l > 1 ? mz / l : mz, jumpHeld: !!(f & 1), sprint: !!(f & 2), jump: !!(f & 4), dash: !!(f & 8), throw: f & 16 ? 'oil' : f & 32 ? 'spit' : null });
+      // golpe que vio su navegador en ese paso: [bot, nx, nz, choque] (ver Sim.applyClaims)
+      const claim = it.length >= 8 && Number.isInteger(it[4]) ? { v: it[4], nx: Number(it[5]) || 0, nz: Number(it[6]) || 0, c: Math.min(80, Number(it[7]) || 0) } : null;
+      c.queue.push({ s: it[0], mx: l > 1 ? mx / l : mx, mz: l > 1 ? mz / l : mz, jumpHeld: !!(f & 1), sprint: !!(f & 2), jump: !!(f & 4), dash: !!(f & 8), throw: f & 16 ? 'oil' : f & 32 ? 'spit' : null, claim });
     }
     if (c.queue.length > 120) c.queue.splice(0, c.queue.length - 120);
-    if (Number.isFinite(m.n)) c.lead = Math.max(0, Math.min(120, m.n | 0)); // cuántos pasos va adelantado su navegador
+    if (Number.isFinite(m.n)) {
+      c.lead = Math.max(0, Math.min(120, m.n | 0)); // cuántos pasos va adelantado su navegador
+      // si se adelantó más (la red se trabó un momento), los bots anticipan más desde ya: si no, sus decisiones
+      // le llegan tarde hasta el próximo ajuste
+      const r = c.room, need = Math.min(LEAD_MAX, c.lead + LEAD_MARGIN);
+      if (need > r.sim.botLead) { r.sim.botLead = need; r.leadLow = 0; }
+    }
   } else if (m.t === 'ping') {
     send(cid, { t: 'pong', c: m.c, step: c ? c.room.sim.stepN : 0 });
   } else if (m.t === 'join') {

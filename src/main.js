@@ -697,6 +697,13 @@ async function main() {
     } catch (e) {
       afterOnline();
       if (e.message === 'full') { loadingEl.classList.remove('show'); toast(t('net.full')); openLobby(); return; }
+      // el servidor tiene una versión nueva del juego: se recarga la página (una vez; si vuelve a pasar enseguida,
+      // se sigue sin conexión, para no quedar recargando)
+      if (e.message === 'old') {
+        let recent = false;
+        try { recent = Date.now() - Number(sessionStorage.getItem('gelatinas.reloadAt') || 0) < 60000; sessionStorage.setItem('gelatinas.reloadAt', String(Date.now())); } catch { /* sin sessionStorage */ }
+        if (!recent) { location.reload(); return; }
+      }
       // el servidor no responde: se juega igual, contra bots y sin conexión (mejor que quedarse afuera)
       telemetry.track('net_fail', { reason: String(e.message).slice(0, 20) });
       if (arenaName !== CONFIG.arena) await loadArenaCovered(CONFIG.arena); else { resetMatch(); coverFrames = 8; }
@@ -738,7 +745,8 @@ async function main() {
     score: Math.floor(player.score), kos: player.kos, falls: player.falls, maxMass: +(player.maxMass || 1).toFixed(1),
     won: teams.active ? teams.wins[player.team] : undefined, lost: teams.active ? teams.wins[1 - player.team] : undefined,
   });
-  perf.onReport = (rep) => telemetry.perf({ ...rep, fpsTarget: adaptive.target, resScale: adaptive.resScale }, !inLobby && !!arena);
+  perf.onReport = (rep) => telemetry.perf({ ...rep, fpsTarget: adaptive.target, resScale: adaptive.resScale, hz: adaptive.hz, lateRate: adaptive.lateRate, win: `${innerWidth}x${innerHeight}@${devicePixelRatio}` }, !inLobby && !!arena);
+  telemetry.netFn = () => online.auditReport(); // en línea: cómo anduvo la red cada minuto (ping, correcciones, golpes fantasma)
   {
     const gl = renderer.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
     telemetry.start({

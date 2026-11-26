@@ -184,10 +184,18 @@ function render() {
   const recs = card('Récords', 'Mejores partidas de todos los tiempos.', 'c6',
     table(['#', 'Blob', 'Modo', 'Puntos', 'KO', 'Cuándo'], D.records.map((r, i) => [String(i + 1), r.name, modeName[r.mode] || r.mode, fmt(r.score), fmt(r.kos || 0), r.at]), [3, 4]));
 
+  // en línea: la auditoría de la red de cada sesión (un resumen por minuto que manda el juego)
+  const perMin = (v, m) => (m > 0.05 ? (v / m).toFixed(1) : '—');
+  const netCard = card('Red en línea', 'Últimas sesiones en salas. Golpes vistos: los que tu pantalla mostró antes de que el servidor confirmara. Fantasma: golpes que se vieron y el servidor no contó. Correcciones visibles: veces que un blob se corrigió más de medio metro.', '',
+    el('div', { class: 'scroll' }, table(['Cuándo', 'País', 'Min', 'Ping', 'Golpes vistos', 'Te pegaron: vistos', 'Fantasma/min', 'Tus correcciones/min', 'De los demás/min', 'Bots tarde', 'fps'],
+      (D.net || []).map((r) => [r.at, r.country, r.min.toFixed(1), `${fmt(r.rtt)} ms`, r.hits ? pct(r.seen / r.hits) : '—', r.meHit ? `${pct((r.meHit - r.meLate) / r.meHit)} de ${fmt(r.meHit)}` : '—',
+        perMin(r.ghost, r.min), perMin(r.meVis, r.min), perMin(r.otVis, r.min), r.planAll ? pct(r.planLate / r.planAll) : '—', r.fps == null ? '—' : fmt(r.fps)]),
+      [2, 3, 4, 5, 6, 7, 8, 9, 10])));
+
   const dimName = { country: 'Países', lang: 'Idiomas', browser: 'Navegadores', os: 'Sistemas', device: 'Dispositivo', referrer: 'De dónde llegan' };
   const dims = Object.entries(D.dims).map(([k, list]) => card(dimName[k] || k, null, 'c4', hbars(list.map((x) => ({ k: x.k, v: x.v })))));
 
-  app.replaceChildren(kpis, visCard, retCard, mCard, hCard, funnel, tut, modes, arenas, perf, recs, ...dims);
+  app.replaceChildren(kpis, visCard, retCard, mCard, hCard, funnel, tut, modes, arenas, perf, recs, netCard, ...dims);
 
   columns(visHost, { labels, every, tipTitle: (i) => daily[i].day, series: [
     { name: 'Nuevos', color: 'var(--series-1)', values: daily.map((d) => d.new) },

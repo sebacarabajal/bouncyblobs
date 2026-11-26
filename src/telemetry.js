@@ -24,7 +24,8 @@ class Telemetry {
     this.queue = [];
     this.match = null;
     this.statsFn = null; // () => { score, kos, falls, maxMass, won, lost } de la partida en curso
-    this.perfAcc = { fps: 0, p95: 0, target: 0, res: 0, n: 0 };
+    this.netFn = null; // () => resumen de la red en línea desde el último (online.auditReport) o null
+    this.perfAcc = this._perfEmpty();
   }
 
   start(info) {
@@ -33,7 +34,7 @@ class Telemetry {
     this.track('session', info);
     this.flush();
     setInterval(() => this.flush(), 20000);
-    setInterval(() => { this._perfOut(); if (!this.queue.length) this.track('beat'); }, 60000);
+    setInterval(() => { this._perfOut(); this._netOut(); if (!this.queue.length) this.track('beat'); }, 60000);
     // al cerrar o esconder la pestaña: se cierra la partida y se manda lo pendiente
     addEventListener('pagehide', () => { this.endMatch('leave'); this._perfOut(); this.flush(true); });
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this.flush(true); });
@@ -49,24 +50,41 @@ class Telemetry {
 
   endMatch(reason) {
     if (!this.match) return;
+    this._netOut(); // lo que falta del último minuto en línea, antes del cierre de la partida
     const s = this.statsFn?.() || {};
     const dur = Math.round((performance.now() - this.match.t0) / 1000);
     this.track('match_end', { mid: this.match.mid, dur, reason, ...s });
     this.match = null;
   }
 
-  // resumen de rendimiento (perf.js lo da cada 10 s); se manda un promedio por minuto
+  // resumen de rendimiento (perf.js lo da cada 10 s); se manda un promedio por minuto.
+  // hz: el monitor medido · late: fracción de frames que llegaron tarde · cpu/gpu: ms por frame (lo que tarda el
+  // juego / la placa) · win: tamaño de la ventana. Con eso se distingue "el juego no llega" de "el monitor o el
+  // escritorio no dejan" (un frame liviano que igual llega tarde no es culpa del juego).
+  _perfEmpty() { return { fps: 0, p95: 0, target: 0, res: 0, hz: 0, late: 0, cpu: 0, gpu: 0, gpuN: 0, n: 0 }; }
   perf(rep, playing) {
     if (!playing || !rep.fps) return;
     const a = this.perfAcc;
-    a.fps += rep.fps; a.p95 += rep.p95Ms || 0; a.target += rep.fpsTarget || 0; a.res += rep.resScale || 1; a.n++;
+    a.fps += rep.fps; a.p95 += rep.p95Ms || 0; a.target += rep.fpsTarget || 0; a.res += rep.resScale || 1;
+    a.hz += rep.hz || 0; a.late += rep.lateRate || 0;
+    a.cpu += (rep.simMs || 0) + (rep.skinMs || 0) + (rep.fxMs || 0) + (rep.drawMs || 0);
+    if (rep.gpuMs != null) { a.gpu += rep.gpuMs; a.gpuN++; }
+    a.win = rep.win; a.n++;
   }
 
   _perfOut() {
     const a = this.perfAcc;
     if (!a.n) return;
-    this.track('perf', { fps: Math.round(a.fps / a.n), p95: Math.round(a.p95 / a.n), target: Math.round(a.target / a.n), res: +(a.res / a.n).toFixed(2) });
-    this.perfAcc = { fps: 0, p95: 0, target: 0, res: 0, n: 0 };
+    this.track('perf', {
+      fps: Math.round(a.fps / a.n), p95: Math.round(a.p95 / a.n), target: Math.round(a.target / a.n), res: +(a.res / a.n).toFixed(2),
+      hz: Math.round(a.hz / a.n), late: +(a.late / a.n).toFixed(2), cpu: +(a.cpu / a.n).toFixed(1), gpu: a.gpuN ? +(a.gpu / a.gpuN).toFixed(1) : null, win: a.win,
+    });
+    this.perfAcc = this._perfEmpty();
+  }
+
+  _netOut() {
+    const r = this.netFn?.();
+    if (r) this.track('net', r);
   }
 
   flush(beacon = false) {

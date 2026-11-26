@@ -61,6 +61,18 @@ export async function adminStats(pool, days, tz) {
                 where m.ended_at is not null and m.score > 0 order by m.score desc limit 20`, [tz]),
   ]);
 
+  // en línea: cómo anduvo la red en cada sesión (online.js manda un resumen por minuto: ver auditReport)
+  const net = await rows(pool, `
+    select to_char(min(e.at) at time zone $2, 'MM-DD HH24:MI') as at, coalesce(s.country, '—') as country, s.fps_avg as fps,
+      sum((e.data->>'dur')::float) as dur,
+      sum((e.data->>'rtt')::float * (e.data->>'dur')::float) / nullif(sum((e.data->>'dur')::float), 0) as rtt,
+      sum((e.data->>'hits')::float) as hits, sum((e.data->>'seen')::float) as seen, sum((e.data->>'ghost')::float) as ghost,
+      sum((e.data->>'meHit')::float) as mehit, sum((e.data->>'meLate')::float) as melate,
+      sum((e.data->>'meVis')::float) as mevis, sum((e.data->>'otVis')::float) as otvis,
+      sum((e.data->>'planLate')::float) as planlate, sum((e.data->>'planOk')::float) as planok
+    from events e join sessions s on s.id = e.session_id
+    where e.type = 'net' and e.at >= $1 group by s.id order by min(e.at) desc limit 25`, P);
+
   const dims = {};
   for (const col of ['country', 'lang', 'browser', 'os', 'device', 'referrer']) {
     dims[col] = (await rows(pool, `select coalesce(${col}, '—') as k, count(distinct player_id) as v from sessions
@@ -104,6 +116,9 @@ export async function adminStats(pool, days, tz) {
     hours: hourArr,
     perf: { buckets: ['<30', '30–45', '45–58', '58+'].map((b) => ({ b, v: n(perfBuckets.find((r) => r.b === b)?.v) })), gpus: gpus.map((r) => ({ gpu: r.gpu, sessions: n(r.sessions), fps: Math.round(n(r.fps)) })) },
     records,
+    net: net.map((r) => ({ at: r.at, country: r.country, fps: r.fps == null ? null : Math.round(n(r.fps)), min: n(r.dur) / 60, rtt: Math.round(n(r.rtt)),
+      hits: n(r.hits), seen: n(r.seen), ghost: n(r.ghost), meHit: n(r.mehit), meLate: n(r.melate), meVis: n(r.mevis), otVis: n(r.otvis),
+      planLate: n(r.planlate), planAll: n(r.planlate) + n(r.planok) })),
     dims,
     live: await liveNow(pool),
   };
