@@ -31,7 +31,6 @@ import { t, translate, onLang, getLang } from './i18n.js';
 import { preloadBackdrops, onLateAsset } from './arenas/common.js';
 import { Tutorial } from './tutorial.js';
 import { Online } from './net/online.js';
-import { keys as keyMap, keyName } from './keys.js';
 
 const ARENA_KEYS = { Digit8: 'cyber', Digit9: 'steam', Digit0: 'crystal' }; // 1-4 quedan para las armas
 
@@ -760,12 +759,12 @@ async function main() {
   }
   const camFocus = new THREE.Vector3();
   const _frustum = new THREE.Frustum(), _pv = new THREE.Matrix4();
-  // arriba de tu blob: la embestida lista (con su tecla), para que se entienda cuándo se puede pegar
+  // arriba de tu blob: un puntito dorado cuando la embestida está lista (para que se entienda cuándo se puede pegar)
   const dashTag = document.createElement('div');
   dashTag.id = 'dash-tag';
-  dashTag.innerHTML = '<span class="b"><i>💥</i><kbd></kbd></span>';
+  dashTag.innerHTML = '<span class="b"></span>';
   document.body.appendChild(dashTag);
-  const dashKey = dashTag.querySelector('kbd'), _tagV = new THREE.Vector3();
+  const _tagV = new THREE.Vector3();
   let dashShown = false;
   let last = performance.now(), acc = 0;
   function frame(now) {
@@ -842,7 +841,6 @@ async function main() {
       if (showTag !== dashShown) {
         dashShown = showTag;
         dashTag.classList.toggle('show', showTag);
-        if (showTag) { dashKey.textContent = touchUI ? '' : keyName(keyMap.map.dash); dashKey.hidden = !!touchUI; }
       }
       if (showTag) {
         _tagV.copy(player.renderPos); _tagV.y += player.r * 2.1 + 0.5;

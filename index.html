@@ -370,15 +370,13 @@
       .op-vol { display: flex; align-items: center; gap: 12px; }
       .op-vol input { flex: 1; accent-color: var(--gold); height: 22px; cursor: pointer; }
       .op-vol b { min-width: 52px; text-align: right; font: 400 18px/1 'Lilita One', system-ui, sans-serif; color: var(--cream); }
-      /* embestida lista: burbujita arriba de tu blob (main.js) */
-      #dash-tag { position: fixed; left: 0; top: 0; z-index: 7; pointer-events: none; opacity: 0; transition: opacity 0.1s; will-change: transform; }
+      /* embestida lista: un puntito dorado arriba de tu blob que late suave (main.js) */
+      #dash-tag { position: fixed; left: 0; top: 0; z-index: 7; pointer-events: none; opacity: 0; transition: opacity 0.15s; will-change: transform; }
       #dash-tag.show { opacity: 1; }
-      #dash-tag .b { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 4px; border-radius: 14px; background: var(--gold); border: 3px solid var(--ink); box-shadow: 0 3px 0 var(--ink); }
-      #dash-tag.show .b { animation: dt-pop 0.28s cubic-bezier(0.3, 1.6, 0.5, 1); }
-      #dash-tag i { font-style: normal; font-size: 16px; line-height: 1; }
-      #dash-tag kbd { font: 900 12px/1 'Nunito', system-ui, sans-serif; color: var(--ink); background: var(--cream); border: 2px solid var(--ink); border-radius: 6px; padding: 2px 5px; }
-      #dash-tag kbd[hidden] { display: none; }
-      @keyframes dt-pop { from { transform: scale(0.4); } }
+      #dash-tag .b { display: block; width: 10px; height: 10px; border-radius: 50%; background: var(--gold); border: 2px solid var(--ink); box-shadow: 0 0 6px 1px rgba(255, 210, 26, 0.55); }
+      #dash-tag.show .b { animation: dt-in 0.2s ease-out, dt-pulse 1.4s ease-in-out 0.2s infinite; }
+      @keyframes dt-in { from { transform: scale(0.3); } }
+      @keyframes dt-pulse { 50% { transform: scale(1.18); box-shadow: 0 0 9px 2px rgba(255, 210, 26, 0.7); } }
       body.in-lobby #dash-tag { display: none; }
       .op-mrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
       .op-mnow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbb9ea; font-size: 13px; }
