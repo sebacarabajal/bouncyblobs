@@ -115,6 +115,8 @@ export default defineConfig({
   plugins: [perfLog(), sfxStore(), devApi()],
   // dos páginas: el juego (index.html) y el panel de analíticas (admin.html, sólo en admin.* en producción)
   build: { rollupOptions: { input: { main: 'index.html', admin: 'admin.html' } } },
+  // versión del juego = fecha y hora (UTC) de la compilación: el panel compara versiones con esto
+  define: { __BUILD__: JSON.stringify(process.argv.includes('build') ? new Date().toISOString().slice(0, 16).replace('T', ' ') : 'dev') },
   // abierto a la red de la casa: así se puede probar desde el celular (http://IP-de-la-PC:5173)
   server: { host: true, watch: { ignored: ['**/public/sfx/**'] } },
 });

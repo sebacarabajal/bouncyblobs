@@ -44,7 +44,7 @@ export class Online {
   // Las que te pegan a vos van siempre con la regla 1 (ver _chainHit).
   static chainMode = 3;
   // ajustes (para probar variantes en server/clienttest.js con TUNE='{"…": …}')
-  static tune = { stunVel: true, splitWin: 12, bounce: true, hitCost: true, chainRel: 8.5, remoteGap: 0.25 };
+  static tune = { stunVel: true, splitWin: 12, bounce: true, hitCost: true, chainRel: 8.5, remoteGap: 0.25, slowSlide: 0.35 };
   // sim: la partida local (se usan sus objetos: blobs, arena, bolitas…) · ui: callbacks de main.js
   constructor(sim, ui) {
     this.sim = sim;
@@ -751,10 +751,14 @@ export class Online {
     this._record();
     // lo que se ve alcanza a la física. Registro: pasos en que eso se desliza a más de 8 m/s (se nota como un
     // "traslado rápido": no es que el blob se mueva así, es la corrección alcanzando)
+    // Un blob que vuela rápido (después de un golpe) disimula una corrección lenta, pero una rápida se ve como un
+    // volantazo: cuanto más rápido va, más despacio se desliza (hasta ~3 veces). Más de 3 m se alcanza rápido igual.
     for (let i = 0; i < js.length; i++) {
-      const v = js[i].visOff;
+      const j = js[i], v = j.visOff;
       if (!v) continue;
-      const l2 = v.lengthSq(), k = l2 > 1 ? 0.06 : 0.12;
+      const l2 = v.lengthSq();
+      let k = l2 > 1 ? 0.06 : 0.12;
+      if (l2 < 9 && !j.dead) { const sp = Math.hypot(j.vBefore.x, j.vBefore.z); if (sp > 6) k *= Math.max(Online.tune.slowSlide, 6 / sp); }
       if (k * Math.sqrt(l2) > 8 * STEP) { if (i === 0) this.stats.jumpMe++; else this.stats.jumpOt++; }
       v.multiplyScalar(1 - k);
     }

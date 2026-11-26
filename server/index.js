@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createPool, migrate } from './db.js';
 import { createApi } from './api.js';
+import { forgetIPs } from './stats.js';
 import { createRealtime } from './realtime.js';
 
 const env = process.env;
@@ -31,8 +32,14 @@ function serveFile(res, file, cache) {
 }
 
 const pool = env.DATABASE_URL ? createPool(env.DATABASE_URL) : null;
-if (pool) await migrate(pool);
-else console.warn('[server] sin DATABASE_URL: el juego anda, pero sin analíticas ni récords');
+if (pool) {
+  await migrate(pool);
+  // las IPs se borran solas a los IP_RETENTION_DAYS días (90 si no se dice; con 0 no se guardan y se borran todas)
+  const ipDays = env.IP_RETENTION_DAYS === '0' ? 0 : Number(env.IP_RETENTION_DAYS) || 90;
+  const forget = () => forgetIPs(pool, ipDays).then((k) => { if (k) console.log(`[db] IPs borradas (más de ${ipDays} días): ${k}`); }).catch((e) => console.error('[db]', e.message));
+  forget();
+  setInterval(forget, 6 * 3600e3).unref();
+} else console.warn('[server] sin DATABASE_URL: el juego anda, pero sin analíticas ni récords');
 const realtime = createRealtime({ env }); // salas en tiempo real (WebSocket /ws)
 const api = createApi({ pool, env, realtime });
 

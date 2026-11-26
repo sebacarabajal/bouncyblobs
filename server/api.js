@@ -1,7 +1,8 @@
 // API del juego: /api/t (eventos de analíticas), /api/records (récords públicos) y /api/admin/* (panel).
 // Se usa igual en desarrollo (montada dentro de Vite, ver vite.config.js) y en producción (server/index.js).
 import { adminUser } from './auth.js';
-import { adminStats, liveNow } from './stats.js';
+import * as stats from './stats.js';
+import { parseUA, refineUA, gpuVendor, clientIP } from './ua.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v, max = 60) => (typeof v === 'string' ? v.slice(0, max).replace(/[\u0000-\u001f]/g, '') : null);
@@ -9,14 +10,6 @@ const num = (v, min, max) => (Number.isFinite(+v) ? Math.min(max, Math.max(min, 
 const int = (v, min, max) => { const n = num(v, min, max); return n == null ? null : Math.round(n); };
 const MODES = new Set(['ffa', 'teams']);
 const ARENAS = new Set(['steam', 'cyber', 'crystal', 'tutorial']);
-
-function parseUA(ua = '') {
-  const browser = /Edg\//.test(ua) ? 'Edge' : /OPR\//.test(ua) ? 'Opera' : /Firefox\//.test(ua) ? 'Firefox'
-    : /Chrome\//.test(ua) ? 'Chrome' : /Safari\//.test(ua) ? 'Safari' : 'Otro';
-  const os = /Windows/.test(ua) ? 'Windows' : /iPhone|iPad/.test(ua) ? 'iOS' : /Mac OS X/.test(ua) ? 'macOS'
-    : /Android/.test(ua) ? 'Android' : /CrOS/.test(ua) ? 'ChromeOS' : /Linux/.test(ua) ? 'Linux' : 'Otro';
-  return { browser, os, device: /Mobi|iPhone|iPad|Android/.test(ua) ? 'mobile' : 'desktop' };
-}
 
 // límite simple por IP (en memoria): un navegador manda ~2 pedidos por minuto; esto frena abusos
 const hits = new Map();
@@ -45,11 +38,16 @@ const send = (res, code, obj, cache = 'no-store') => {
 };
 
 // ---------------------------------------------------------------- eventos del juego
-async function ingest(pool, req, body) {
+const bool = (v) => (v == null ? null : !!v);
+// encabezados de ubicación de Cloudflare (sólo llegan si están activados en Cloudflare; vienen con %xx)
+const head = (req, k, max = 60) => { const v = req.headers[k]; if (!v) return null; try { return str(decodeURIComponent(String(v)), max); } catch { return str(String(v), max); } };
+
+async function ingest(pool, req, body, env = {}) {
   const pid = body.pid, sid = body.sid;
   if (!UUID.test(pid) || !UUID.test(sid) || !Array.isArray(body.ev)) return 400;
   const country = str(req.headers['cf-ipcountry'], 2);
-  const ua = parseUA(String(req.headers['user-agent'] || ''));
+  const uaText = String(req.headers['user-agent'] || '');
+  const ua = parseUA(uaText);
   const c = await pool.connect();
   try {
     await c.query('begin');
@@ -63,11 +61,30 @@ async function ingest(pool, req, body) {
              returning (xmax = 0) as is_new`,
             [pid, str(d.name, 16), country, str(d.lang, 5)],
           );
+          // la IP se guarda (y se borra sola a los IP_RETENTION_DAYS días; con 0 no se guarda): ver server/index.js
+          const keepIP = env.IP_RETENTION_DAYS !== '0';
+          const gpu = str(d.gpu, 90), vendor = gpuVendor(gpu);
           await c.query(
-            `insert into sessions (id, player_id, is_new, country, lang, browser, os, device, gpu, screen, referrer)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) on conflict (id) do nothing`,
-            [sid, pid, p.rows[0].is_new, country, str(d.lang, 5), ua.browser, ua.os, ua.device, str(d.gpu, 90), str(d.screen, 12), str(d.ref, 80)],
+            `insert into sessions (id, player_id, is_new, country, lang, browser, os, device, gpu, screen, referrer,
+               ip, region, city, ua, browser_ver, os_ver, is_bot, gpu_vendor, cores, ram, dpr, win, tz, langs, touch, conn, ver,
+               utm_source, utm_medium, utm_campaign)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+               $25, $26, $27, $28, $29, $30, $31) on conflict (id) do nothing`,
+            [sid, pid, p.rows[0].is_new, country, str(d.lang, 5), ua.browser, ua.os, ua.device, gpu, str(d.screen, 12), str(d.ref, 80),
+              keepIP ? clientIP(req) : null, head(req, 'cf-region'), head(req, 'cf-ipcity'), str(uaText, 300), ua.browserVer, ua.osVer,
+              ua.bot || vendor === 'Software', vendor, int(d.cores, 1, 512), num(d.ram, 0, 1024), num(d.dpr, 0.5, 8), str(d.win, 12),
+              str(d.tz, 40), str(d.langs, 60), bool(d.touch), str(d.conn, 12), str(d.ver, 24),
+              str(d.utm_source, 40), str(d.utm_medium, 40), str(d.utm_campaign, 60)],
           );
+          break;
+        }
+        case 'device': { // client hints (llegan un instante después): versiones exactas de sistema y navegador
+          const browsers = Array.isArray(d.browsers)
+            ? d.browsers.slice(0, 8).filter((b) => Array.isArray(b)).map((b) => [str(String(b[0]), 40), str(String(b[1]), 20)])
+            : null;
+          const r = refineUA(ua, { platformVersion: str(d.platformVersion, 20), model: str(d.model, 40), browsers });
+          await c.query('update sessions set os_ver = coalesce($2, os_ver), browser_ver = coalesce($3, browser_ver), model = coalesce($4, model) where id = $1',
+            [sid, r.osVer ?? null, r.browserVer ?? null, r.model || null]);
           break;
         }
         case 'match_start': {
@@ -96,7 +113,14 @@ async function ingest(pool, req, body) {
         case 'perf': {
           const fps = num(d.fps, 0, 500);
           if (fps == null) break;
-          await c.query('update sessions set fps_avg = (coalesce(fps_avg, 0) * fps_n + $2) / (fps_n + 1), fps_n = fps_n + 1 where id = $1', [sid, fps]);
+          // promedios de la sesión: fps_n cuenta los resúmenes y sirve para todos los promedios
+          await c.query(`update sessions set
+              fps_target = case when $3::real is null then fps_target else (coalesce(fps_target, $3) * fps_n + $3) / (fps_n + 1) end,
+              cpu_ms = case when $4::real is null then cpu_ms else (coalesce(cpu_ms, $4) * fps_n + $4) / (fps_n + 1) end,
+              gpu_ms = case when $5::real is null then gpu_ms else (coalesce(gpu_ms, $5) * fps_n + $5) / (fps_n + 1) end,
+              hz = coalesce($6, hz), win = coalesce(win, $7),
+              fps_avg = (coalesce(fps_avg, 0) * fps_n + $2) / (fps_n + 1), fps_n = fps_n + 1 where id = $1`,
+          [sid, fps, num(d.target, 0, 500), num(d.cpu, 0, 1000), num(d.gpu, 0, 1000), num(d.hz, 0, 1000), str(d.win, 20)]);
           await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, 'perf', JSON.stringify({
             fps, p95: num(d.p95, 0, 1000), target: num(d.target, 0, 500), res: num(d.res, 0, 2),
             hz: num(d.hz, 0, 1000), late: num(d.late, 0, 1), cpu: num(d.cpu, 0, 1000), gpu: num(d.gpu, 0, 1000), win: str(d.win, 20),
@@ -107,6 +131,15 @@ async function ingest(pool, req, body) {
           const data = {};
           for (const [k, v] of Object.entries(d).slice(0, 40)) if (/^[a-zA-Z0-9]{1,12}$/.test(k)) { const n = num(v, -1e7, 1e7); if (n != null) data[k] = n; }
           await c.query('insert into events (session_id, player_id, type, data) select $1, $2, $3, $4 where exists (select 1 from sessions where id = $1)', [sid, pid, 'net', JSON.stringify(data)]);
+          // sumas de la sesión (el ping, promediado por tiempo)
+          const dur = num(data.dur, 0, 3600) || 0, I = (k) => int(data[k], 0, 1e6) || 0;
+          if (dur > 0) {
+            await c.query(`update sessions set
+                rtt_avg = case when $3::real is null then rtt_avg else (coalesce(rtt_avg, $3) * net_s + $3 * $2) / (net_s + $2) end,
+                net_s = net_s + $2, hits = hits + $4, seen = seen + $5, ghost = ghost + $6, me_hit = me_hit + $7,
+                me_late = me_late + $8, me_vis = me_vis + $9, ot_vis = ot_vis + $10 where id = $1`,
+            [sid, dur, num(data.rtt, 0, 10000), I('hits'), I('seen'), I('ghost'), I('meHit'), I('meLate'), I('meVis'), I('otVis')]);
+          }
           break;
         }
         case 'tutorial': case 'round': case 'mode_pick': case 'net_fail': {
@@ -160,7 +193,7 @@ export function createApi({ pool, env, realtime = null }) {
         if (limited(ip)) return send(res, 429, { error: 'despacio' }), true;
         let body;
         try { body = JSON.parse(await readBody(req)); } catch { return send(res, 400, { error: 'json' }), true; }
-        const code = await ingest(pool, req, body);
+        const code = await ingest(pool, req, body, env);
         res.statusCode = code; res.end();
         return true;
       }
@@ -173,12 +206,32 @@ export function createApi({ pool, env, realtime = null }) {
       if (url.pathname.startsWith('/api/admin/')) {
         const who = await adminUser(req, env);
         if (!who) return send(res, 403, { error: 'sin permiso' }), true;
-        if (url.pathname === '/api/admin/stats') {
-          const days = int(url.searchParams.get('days'), 1, 365) ?? 30;
-          send(res, 200, { user: who.email, ...(await adminStats(pool, days, env.REPORT_TZ || 'America/Argentina/Buenos_Aires')) });
+        // panel: una ruta por página; todas aceptan los mismos filtros (ver stats.parseFilters)
+        const sp = url.searchParams, f = stats.parseFilters(sp), tz = env.REPORT_TZ || 'America/Argentina/Buenos_Aires';
+        const q = sp.get('q') ? String(sp.get('q')).trim().slice(0, 60) || null : null;
+        const page = int(sp.get('page'), 0, 10000) ?? 0;
+        const routes = {
+          '/api/admin/me': async () => ({ user: who.email, ipDays: env.IP_RETENTION_DAYS === '0' ? 0 : Number(env.IP_RETENTION_DAYS) || 90 }),
+          '/api/admin/options': () => stats.options(pool, f),
+          '/api/admin/overview': () => stats.overview(pool, f, tz),
+          '/api/admin/players': () => stats.players(pool, f, { q, sort: sp.get('sort') || 'last', page }, tz),
+          '/api/admin/sessions': () => stats.sessions(pool, f, { q, page }, tz),
+          '/api/admin/perf': () => stats.perf(pool, f),
+          '/api/admin/net': () => stats.net(pool, f, tz),
+          '/api/admin/audience': () => stats.audience(pool, f),
+          '/api/admin/live': () => stats.liveNow(pool),
+          '/api/admin/player': async () => {
+            const id = sp.get('id');
+            if (!UUID.test(id || '')) return null;
+            return stats.player(pool, id, tz);
+          },
+        };
+        const fn = routes[url.pathname];
+        if (fn) {
+          const out = await fn();
+          if (out == null) send(res, 404, { error: 'no existe' }); else send(res, 200, out);
           return true;
         }
-        if (url.pathname === '/api/admin/live') { send(res, 200, await liveNow(pool)); return true; }
       }
       send(res, 404, { error: 'no existe' });
       return true;

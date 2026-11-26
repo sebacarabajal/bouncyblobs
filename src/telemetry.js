@@ -1,8 +1,33 @@
-// Analíticas propias del juego (las ve el panel del admin). Anónimas: cada navegador tiene un id al azar;
-// no se manda nada personal (el nombre de la gelatina sí, para los récords).
+// Analíticas propias del juego (las ve el panel del admin). Cada navegador tiene un id al azar; no se pide ni se
+// manda nada personal (el nombre del blob sí, para los récords). El servidor anota además la IP de cada visita y la
+// borra sola a los IP_RETENTION_DAYS días (ver server/index.js).
 // Se juntan en una cola y se mandan cada ~20 s a /api/t (y una última vez al cerrar la pestaña).
 // No se manda nada desde la página del admin en producción (para no ensuciar los números).
 import { IS_ADMIN } from './env.js';
+
+// el equipo y el navegador (sin nada personal): para saber dónde anda bien el juego y dónde no
+function deviceInfo() {
+  const nav = navigator, q = new URLSearchParams(location.search);
+  let tz = null;
+  try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* viejo */ }
+  return {
+    win: `${innerWidth}x${innerHeight}`, dpr: +(devicePixelRatio || 1).toFixed(2), cores: nav.hardwareConcurrency || null, ram: nav.deviceMemory || null,
+    tz, langs: (nav.languages || [nav.language]).slice(0, 4).join(','), touch: (nav.maxTouchPoints || 0) > 0,
+    conn: nav.connection?.effectiveType || null, ver: typeof __BUILD__ !== 'undefined' ? __BUILD__ : null,
+    utm_source: q.get('utm_source'), utm_medium: q.get('utm_medium'), utm_campaign: q.get('utm_campaign'),
+  };
+}
+
+// versión exacta del sistema y del navegador (Chrome y Edge la dan aparte: el texto del navegador miente, por
+// ejemplo Windows 11 dice ser Windows 10)
+async function deviceHints() {
+  const ud = navigator.userAgentData;
+  if (!ud?.getHighEntropyValues) return null;
+  try {
+    const h = await ud.getHighEntropyValues(['platformVersion', 'model', 'fullVersionList']);
+    return { platformVersion: h.platformVersion || null, model: h.model || null, browsers: (h.fullVersionList || []).map((b) => [b.brand, b.version]) };
+  } catch { return null; }
+}
 
 const uuid = () => {
   if (crypto.randomUUID) return crypto.randomUUID();
@@ -31,7 +56,8 @@ class Telemetry {
   start(info) {
     if (OFF || this.started) return;
     this.started = true;
-    this.track('session', info);
+    this.track('session', { ...deviceInfo(), ...info });
+    deviceHints().then((h) => { if (h) this.track('device', h); });
     this.flush();
     setInterval(() => this.flush(), 20000);
     setInterval(() => { this._perfOut(); this._netOut(); if (!this.queue.length) this.track('beat'); }, 60000);
