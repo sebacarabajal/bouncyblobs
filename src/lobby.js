@@ -125,7 +125,7 @@ export class Lobby {
     const tag = $('.lb-tag');
     const showName = () => { tag.textContent = ((this.name || '').trim() || t('you')).toUpperCase(); };
     showName();
-    nameIn.addEventListener('input', () => { this.name = nameIn.value; showName(); });
+    nameIn.addEventListener('input', () => { this.name = nameIn.value; showName(); this._nameHint(); });
 
     // ------------------------------------------------ forma (siluetas de frente, dibujadas con la misma fórmula del juego)
     const shapesEl = $('.lb-shapes');
@@ -485,7 +485,15 @@ export class Lobby {
       li.append(k, n, p);
       return li;
     }) : [Object.assign(document.createElement('li'), { className: 'none', textContent: t('rk.empty') })]));
-    box.querySelector('.lb-rme').textContent = me && !list.some((r) => r.mine) ? t('rk.you', { rank: me.rank, score: fmtN(me.score) }) : '';
+    this._rkMine = { me, listed: list.some((r) => r.mine) };
+    this._nameHint();
+  }
+
+  // abajo de la tablita: "ponte un nombre" (sin nombre no se entra al ranking) o tu mejor puesto
+  _nameHint() {
+    const nm = (this.name || '').trim(), { me = null, listed = false } = this._rkMine || {};
+    this.$('.lb-recs .lb-rme').textContent = !nm || isDefaultName(nm) ? t('rk.nameHint')
+      : me && !listed ? t('rk.you', { rank: me.rank, score: fmtN(me.score) }) : '';
   }
 
   // ranking completo (hasta 50 por tabla)

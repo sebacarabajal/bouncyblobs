@@ -163,7 +163,9 @@ async function ingest(pool, req, body, env = {}) {
   }
 }
 
+// los nombres que pone el juego si no escribes uno: esos jugadores no entran a ningún ranking
 const DEFAULT_NAMES = new Set(['', 'Tú', 'You', 'Você', 'Vos', 'Blob', '?']);
+const NAMED = `p.name is not null and btrim(p.name) <> all (array['${[...DEFAULT_NAMES].map((x) => x.replace(/'/g, "''")).join("','")}'])`;
 
 // ---------------------------------------------------------------- ranking (mejor partida de cada jugador en el período)
 // me: el id del navegador que pregunta (así se marca su fila y se le dice su puesto, sin mostrar ids ajenos)
@@ -171,8 +173,8 @@ async function ranking(pool, mode, period, limit, me) {
   const since = { week: "now() - interval '7 days'", month: "now() - interval '30 days'", all: "'-infinity'::timestamptz" }[period];
   const r = await pool.query(`
     with games as (
-      select m.player_id, m.score, m.kos, m.ended_at from matches m join sessions s on s.id = m.session_id
-      where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and m.score > 0 and not s.is_bot
+      select m.player_id, m.score, m.kos, m.ended_at from matches m join sessions s on s.id = m.session_id join players p on p.id = m.player_id
+      where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and m.score > 0 and not s.is_bot and ${NAMED}
     ),
     best as (select distinct on (player_id) player_id, score, kos, ended_at from games order by player_id, score desc, ended_at),
     n as (select player_id, count(*) as games from games group by 1),
@@ -194,7 +196,7 @@ async function records(pool, mode, period) {
   const r = await pool.query(
     `select distinct on (m.player_id) coalesce(p.name, '?') as name, m.score, m.kos, m.ended_at
      from matches m join players p on p.id = m.player_id
-     where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and m.score > 0
+     where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and m.score > 0 and ${NAMED}
      order by m.player_id, m.score desc`,
     [mode],
   );

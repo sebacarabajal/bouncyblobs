@@ -114,7 +114,8 @@ export async function overview(pool, f, tz) {
       from matches m join sessions s on s.id = m.session_id where ${w} and m.arena <> 'tutorial' group by 1`, P),
     rows(pool, `select m.mode, coalesce(p.name, '?') as name, m.player_id as pid, m.score, m.kos, to_char(m.ended_at at time zone ${T}, 'YYYY-MM-DD HH24:MI') as at
       from matches m join players p on p.id = m.player_id join sessions s on s.id = m.session_id
-      where ${w} and m.ended_at is not null and m.score > 0 order by m.score desc limit 15`, P),
+      where ${w} and m.ended_at is not null and m.score > 0 and p.name is not null and btrim(p.name) <> all (array['', 'Tú', 'You', 'Você', 'Vos', 'Blob', '?'])
+      order by m.score desc limit 15`, P),
   ]);
 
   // serie diaria completa (días sin datos = 0; como mucho los últimos 120)
