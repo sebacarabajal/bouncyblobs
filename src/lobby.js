@@ -4,8 +4,14 @@ import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment
 import { Jelly, R, SHAPE_NAMES, shapeOutline } from './jelly.js';
 import { t, translate, onLang, setLang, getLang, LANGS, isDefaultName } from './i18n.js';
 import { tutorialSeen, markTutorial } from './tutorial.js';
-import { fetchRecords } from './telemetry.js';
+import { fetchRanking } from './telemetry.js';
 import { logoHTML } from './logo.js';
+
+const MEDALS = ['🥇', '🥈', '🥉'];
+// bandera del país (código de dos letras → emoji)
+const flag = (cc) => (cc && /^[A-Z]{2}$/.test(cc) && cc !== 'XX' && cc !== 'T1' ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '🏳️');
+const fmtN = (v) => new Intl.NumberFormat(getLang()).format(Math.round(v || 0));
+const when = (at) => { try { return new Date(at).toLocaleDateString(getLang(), { day: 'numeric', month: 'short' }); } catch { return ''; } };
 
 // Pantalla de inicio: nombre, forma, color (selector con gotero) y tatuaje dibujado a mano alzada.
 // Tiene su propia vista previa 3D con una gelatina de verdad (misma física de piel que en el juego).
@@ -74,7 +80,7 @@ export class Lobby {
         <button class="lb-go" data-i18n="lb.go"></button>
         <button class="lb-tut" data-i18n="tut.btn"></button>
         <p class="lb-foot" data-i18n-html="lb.foot"></p>
-        <div class="lb-recs"><b data-i18n="lb.records"></b><ol></ol></div>
+        <div class="lb-recs"><b data-i18n="lb.records"></b><ol></ol><p class="lb-rme"></p><button class="lb-rall" data-i18n="rk.all"></button></div>
       </div>
       <div class="lb-stage"><div class="lb-tag"></div><canvas class="lb-3d"></canvas><div class="lb-tip" data-i18n="lb.tip"></div></div>
       </div>
@@ -95,6 +101,17 @@ export class Lobby {
             <button class="lb-mcard" data-mode="teams"><span class="lb-mico"><i class="tA"></i><i class="tB"></i></span><b data-i18n="mode.teams"></b><small data-i18n="mode.teamsD"></small></button>
           </div>
           <button class="lb-mno lb-mback" data-i18n="mode.back"></button>
+        </div>
+      </div>
+      <div class="lb-modal lb-rank" role="dialog" aria-modal="true">
+        <div class="lb-mbox lb-rbox">
+          <button class="lb-rclose" data-i18n-title="rk.close">✕</button>
+          <h2 data-i18n="rk.title"></h2>
+          <div class="lb-rtabs"><button data-p="week" data-i18n="rk.week"></button><button data-p="month" data-i18n="rk.month"></button><button data-p="all" data-i18n="rk.ever"></button></div>
+          <div class="lb-rtabs lb-rsmall"><button data-m="ffa" data-i18n="rk.ffa"></button><button data-m="teams" data-i18n="rk.teams"></button></div>
+          <div class="lb-rlist"></div>
+          <p class="lb-rme"></p>
+          <p class="lb-rnote" data-i18n="rk.note"></p>
         </div>
       </div>`;
     const $ = (s) => el.querySelector(s);
@@ -239,7 +256,8 @@ export class Lobby {
     // después: elegir el modo (todos contra todos · equipos)
     const modal = $('.lb-modal'), modes = $('.lb-modes');
     this.modalOpen = false;
-    const closeModal = () => { this.modalOpen = false; modal.classList.remove('show'); modes.classList.remove('show'); };
+    const rank = $('.lb-rank');
+    const closeModal = () => { this.modalOpen = false; modal.classList.remove('show'); modes.classList.remove('show'); rank.classList.remove('show'); };
     const chooseMode = () => {
       this.modalOpen = true;
       modal.classList.remove('show');
@@ -260,6 +278,19 @@ export class Lobby {
     $('.lb-mno').addEventListener('click', () => { markTutorial('declined'); this.track('tutorial', { state: 'declined' }); chooseMode(); });
     modes.querySelectorAll('.lb-mcard').forEach((b) => b.addEventListener('click', () => { closeModal(); this.start({ mode: b.dataset.mode }); }));
     $('.lb-mback').addEventListener('click', closeModal);
+
+    // ranking completo: semana · mes · siempre, en cada modo
+    this.rk = { period: 'week', mode: 'ffa' };
+    $('.lb-rall').addEventListener('click', () => {
+      this.modalOpen = true;
+      rank.classList.add('show');
+      this._rankLoad();
+      setTimeout(() => rank.querySelector('.lb-rclose').focus(), 30);
+    });
+    rank.querySelector('.lb-rclose').addEventListener('click', closeModal);
+    rank.addEventListener('click', (e) => { if (e.target === rank) closeModal(); });
+    rank.querySelectorAll('[data-p]').forEach((b) => b.addEventListener('click', () => { this.rk.period = b.dataset.p; this._rankLoad(); }));
+    rank.querySelectorAll('[data-m]').forEach((b) => b.addEventListener('click', () => { this.rk.mode = b.dataset.m; this._rankLoad(); }));
     for (const m of [modal, modes]) m.addEventListener('pointerdown', (e) => { if (e.target === m) closeModal(); }); // clic afuera = cancelar
     addEventListener('keydown', (e) => {
       if (!this.isOpen) return;
@@ -363,6 +394,7 @@ export class Lobby {
     const loop = (now) => {
       if (!this.isOpen) { this.raf = 0; return; }
       this.raf = requestAnimationFrame(loop);
+      if (now - last < 15) return; // el blob de muestra: con 60 por segundo alcanza (en un monitor de 144 Hz eran 144)
       const dt = Math.min(0.1, (now - last) / 1000);
       last = now;
       const j = this.jelly;
@@ -438,18 +470,49 @@ export class Lobby {
   }
 
   // mode.tutorial = entrar al tutorial en vez de a una partida
-  // récords de la semana (todos contra todos). Los nombres los escriben los jugadores: siempre como texto.
+  // los 5 mejores de la semana (todos contra todos). Los nombres los escriben los jugadores: siempre como texto.
   async _records() {
     const box = this.$('.lb-recs'), ol = box.querySelector('ol');
-    const list = (await fetchRecords('ffa', 'week')).slice(0, 5);
-    box.classList.toggle('show', list.length > 0);
-    ol.replaceChildren(...list.map((r) => {
+    const { list, me } = await fetchRanking({ mode: 'ffa', period: 'week', limit: 5 });
+    ol.replaceChildren(...(list.length ? list.map((r) => {
       const li = document.createElement('li');
-      const n = document.createElement('span'); n.textContent = r.name;
-      const p = document.createElement('b'); p.textContent = String(r.score);
-      li.append(n, p);
+      li.className = r.mine ? 'mine' : '';
+      const k = document.createElement('i'); k.textContent = MEDALS[r.rank - 1] || `${r.rank}.`;
+      const n = document.createElement('span'); n.textContent = `${flag(r.country)} ${r.name}`;
+      const p = document.createElement('b'); p.textContent = fmtN(r.score);
+      li.append(k, n, p);
       return li;
-    }));
+    }) : [Object.assign(document.createElement('li'), { className: 'none', textContent: t('rk.empty') })]));
+    box.querySelector('.lb-rme').textContent = me && !list.some((r) => r.mine) ? t('rk.you', { rank: me.rank, score: fmtN(me.score) }) : '';
+  }
+
+  // ranking completo (hasta 50 por tabla)
+  async _rankLoad() {
+    const box = this.$('.lb-rank'), { period, mode } = this.rk;
+    box.querySelectorAll('[data-p]').forEach((b) => b.classList.toggle('on', b.dataset.p === period));
+    box.querySelectorAll('[data-m]').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
+    const host = box.querySelector('.lb-rlist');
+    host.classList.add('wait');
+    const key = (this._rkKey = `${period}|${mode}`);
+    const { list, me } = await fetchRanking({ mode, period, limit: 50 });
+    if (key !== this._rkKey) return; // ya se pidió otra tabla
+    host.classList.remove('wait');
+    const cell = (tag, txt, cls) => { const c = document.createElement(tag); c.textContent = txt; if (cls) c.className = cls; return c; };
+    if (!list.length) { host.replaceChildren(cell('p', t('rk.none'), 'lb-rnone')); }
+    else {
+      const table = document.createElement('table');
+      const head = document.createElement('tr');
+      head.append(cell('th', '#'), cell('th', t('rk.player')), cell('th', t('rk.pts'), 'n'), cell('th', t('rk.kos'), 'n'), cell('th', t('rk.games'), 'n'), cell('th', t('rk.when'), 'n'));
+      table.append(head, ...list.map((r) => {
+        const tr = document.createElement('tr');
+        if (r.mine) tr.className = 'mine';
+        tr.append(cell('td', MEDALS[r.rank - 1] || String(r.rank), 'k'), cell('td', `${flag(r.country)} ${r.name}`), cell('td', fmtN(r.score), 'n b'),
+          cell('td', fmtN(r.kos), 'n'), cell('td', fmtN(r.games), 'n'), cell('td', when(r.at), 'n'));
+        return tr;
+      }));
+      host.replaceChildren(table);
+    }
+    box.querySelector('.lb-rme').textContent = me && !list.some((r) => r.mine) ? t('rk.you', { rank: me.rank, score: fmtN(me.score) }) : '';
   }
 
   start(mode = {}) {

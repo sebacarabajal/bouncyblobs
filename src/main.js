@@ -767,6 +767,9 @@ async function main() {
     last = now;
     if (!arena) { renderer.clear(); return; } // todavía en la pantalla de inicio, sin arena armada
     if (warming) { acc = 0; return; } // compilando materiales tapado por la pantalla de carga
+    // en el menú la arena no se ve (el fondo del menú es opaco): no se simula ni se dibuja nada. Antes seguía la
+    // partida entera de fondo (16 bots, física, piel, dibujo) y en una PC lenta el menú se pintaba a los tirones
+    if (inLobby && !loadingEl.classList.contains('show')) { acc = 0; return; }
 
     // sin congelamientos: la simulación nunca se pausa (pensado para multiplayer)
     acc += dt * (online.active ? online.timeScale : 1); // en línea: ritmo apenas ajustado (ver online.js timeScale)

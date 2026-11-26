@@ -63,7 +63,7 @@ const server = http.createServer(async (req, res) => {
   const file = path.join(ROOT, path.normalize(p).replace(/^(\.\.[/\\])+/, ''));
   if (!file.startsWith(ROOT)) { res.statusCode = 400; res.end(); return; }
   // los archivos con hash (assets/) no cambian nunca: caché de un año; el resto se revalida
-  const cache = p.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache';
+  const cache = p.startsWith('/assets/') || p.startsWith('/fonts/') ? 'public, max-age=31536000, immutable' : 'no-cache';
   serveFile(res, file, cache);
 });
 

@@ -125,7 +125,16 @@ class Telemetry {
 
 export const telemetry = new Telemetry();
 
-// récords públicos (para la pantalla de inicio)
+// ranking (mejor partida de cada uno): { list: [{ rank, mine, name, country, score, kos, games, at }], me: { rank, score } }
+// period: 'week' | 'month' | 'all'. Va el id de este navegador para marcar su fila (el servidor no muestra ids).
+export async function fetchRanking({ mode = 'ffa', period = 'week', limit = 10 } = {}) {
+  try {
+    const r = await fetch(`/api/records?v=2&mode=${mode}&period=${period}&limit=${limit}&me=${encodeURIComponent(pid)}`);
+    return r.ok ? await r.json() : { list: [], me: null };
+  } catch { return { list: [], me: null }; }
+}
+
+// récords públicos (versión vieja)
 export async function fetchRecords(mode = 'ffa', period = 'week') {
   try {
     const r = await fetch(`/api/records?mode=${mode}&period=${period}`);

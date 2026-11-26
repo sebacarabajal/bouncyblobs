@@ -9,6 +9,12 @@ const params = new URLSearchParams(location.search);
 const handheld = mm('(pointer: coarse)') && !mm('(any-pointer: fine)');
 
 for (const el of document.querySelectorAll('.ld-title')) el.innerHTML = logoHTML(); // logo de la pantalla de carga
+// el logo rebota recién con su letra cargada (las fuentes se piden al principio de la página; tope 1,5 s)
+{
+  const ready = () => document.documentElement.classList.add('fonts-ready');
+  document.fonts?.load?.("400 1em 'Lilita One'").then(ready, ready);
+  setTimeout(ready, 1500);
+}
 translate(); // textos fijos de la página (ayuda, pantalla de carga…) en el idioma del navegador
 const start = () => import('./main.js');
 

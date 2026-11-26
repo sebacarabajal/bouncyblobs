@@ -6,7 +6,7 @@ import { parseUA, refineUA, gpuVendor, clientIP } from './ua.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v, max = 60) => (typeof v === 'string' ? v.slice(0, max).replace(/[\u0000-\u001f]/g, '') : null);
-const num = (v, min, max) => (Number.isFinite(+v) ? Math.min(max, Math.max(min, +v)) : null);
+const num = (v, min, max) => (v == null || v === '' || !Number.isFinite(+v) ? null : Math.min(max, Math.max(min, +v))); // (sin dato = null, no 0)
 const int = (v, min, max) => { const n = num(v, min, max); return n == null ? null : Math.round(n); };
 const MODES = new Set(['ffa', 'teams']);
 const ARENAS = new Set(['steam', 'cyber', 'crystal', 'tutorial']);
@@ -163,7 +163,28 @@ async function ingest(pool, req, body, env = {}) {
   }
 }
 
-// ---------------------------------------------------------------- récords (mejor partida de cada jugador)
+// ---------------------------------------------------------------- ranking (mejor partida de cada jugador en el período)
+// me: el id del navegador que pregunta (así se marca su fila y se le dice su puesto, sin mostrar ids ajenos)
+async function ranking(pool, mode, period, limit, me) {
+  const since = { week: "now() - interval '7 days'", month: "now() - interval '30 days'", all: "'-infinity'::timestamptz" }[period];
+  const r = await pool.query(`
+    with games as (
+      select m.player_id, m.score, m.kos, m.ended_at from matches m join sessions s on s.id = m.session_id
+      where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and m.score > 0 and not s.is_bot
+    ),
+    best as (select distinct on (player_id) player_id, score, kos, ended_at from games order by player_id, score desc, ended_at),
+    n as (select player_id, count(*) as games from games group by 1),
+    ranked as (select b.*, n.games, rank() over (order by b.score desc) as rank from best b join n using (player_id))
+    select r.rank, r.player_id = $3 as mine, coalesce(p.name, '?') as name, p.country, r.score, r.kos, r.games, r.ended_at as at
+    from ranked r join players p on p.id = r.player_id
+    where r.rank <= $2 or r.player_id = $3 order by r.rank, r.ended_at limit $2 + 1`, [mode, limit, me || null]);
+  const rows = r.rows.map((x) => ({ rank: Number(x.rank), mine: !!x.mine, name: x.name, country: x.country, score: Number(x.score), kos: Number(x.kos) || 0, games: Number(x.games), at: x.at }));
+  const list = rows.filter((x) => x.rank <= limit).slice(0, limit);
+  const mine = rows.find((x) => x.mine) || null;
+  return { list, me: mine ? { rank: mine.rank, score: mine.score } : null };
+}
+
+// (versión vieja, la usan las páginas abiertas antes de actualizar)
 async function records(pool, mode, period) {
   const since = period === 'week' ? "now() - interval '7 days'" : period === 'day' ? "now() - interval '1 day'" : "'-infinity'::timestamptz";
   const r = await pool.query(
@@ -199,7 +220,14 @@ export function createApi({ pool, env, realtime = null }) {
       }
       if (url.pathname === '/api/records' && req.method === 'GET') {
         const mode = MODES.has(url.searchParams.get('mode')) ? url.searchParams.get('mode') : 'ffa';
-        const period = ['day', 'week', 'all'].includes(url.searchParams.get('period')) ? url.searchParams.get('period') : 'week';
+        const sp = url.searchParams;
+        if (sp.get('v') === '2') {
+          const period = ['week', 'month', 'all'].includes(sp.get('period')) ? sp.get('period') : 'week';
+          const me = UUID.test(sp.get('me') || '') ? sp.get('me') : null;
+          send(res, 200, await ranking(pool, mode, period, int(sp.get('limit'), 1, 100) ?? 10, me), me ? 'private, max-age=20' : 'public, max-age=30');
+          return true;
+        }
+        const period = ['day', 'week', 'all'].includes(sp.get('period')) ? sp.get('period') : 'week';
         send(res, 200, await records(pool, mode, period), 'public, max-age=30');
         return true;
       }
