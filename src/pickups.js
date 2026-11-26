@@ -69,10 +69,18 @@ export class Pickups {
   }
 
   // en línea: bolita que creó el servidor (con su id) · estado 'rest' si ya estaba en el piso
-  addRemote({ id, x, y, z, vx = 0, vy = 0, vz = 0, power = null, rest = false }) {
+  // age: hace cuánto la creó el servidor (se adelanta la caída hasta el presente que se está mostrando)
+  addRemote({ id, x, y, z, vx = 0, vy = 0, vz = 0, power = null, rest = false, age = 0 }) {
     if (this.list.some((p) => p.id === id)) return;
     const p = this._make(_v.set(x, y, z), new THREE.Vector3(vx, vy, vz), power, id);
-    if (rest) { p.state = 'rest'; p.mesh.position.y = 0; p.t = 1; }
+    if (rest) { p.state = 'rest'; p.mesh.position.y = 0; p.t = 1; return; }
+    if (age > 0) {
+      const g = CONFIG.gravity * 0.7, m = p.mesh.position;
+      m.x += vx * age; m.z += vz * age;
+      m.y += vy * age + 0.5 * g * age * age;
+      p.vel.y += g * age;
+      if (m.y <= 0) { m.y = Math.max(m.y, 0); if (this.floorAt?.(m.x, m.z) !== false) { p.vel.set(0, 0, 0); p.state = 'rest'; p.t = 0; } }
+    }
   }
 
   // en línea: el servidor dice que j se la comió (se ve cómo la absorbe)

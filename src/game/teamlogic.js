@@ -15,7 +15,7 @@ const END_TIME = 4.5;
 const SERIES_END_TIME = 7;
 export const INTRO_TIME = 2.6;
 export const ROUND_INTRO = 1.4;
-const COUNT_TIME = 3;
+export const COUNT_TIME = 3;
 
 export class TeamLogic {
   // emit(tipo, datos): 'intro' {round, wins} · 'count' {n} (0 = ¡YA!) · 'roundEnd' {w, wins, series}
@@ -72,8 +72,9 @@ export class TeamLogic {
   // una gelatina entra a la partida en curso (un jugador que reemplaza a un bot): va al equipo con menos
   join(j) {
     if (!this.active) return;
+    // si ocupa el lugar de un bot, se queda con su equipo (así los equipos siguen parejos); si no, al que tenga menos
     const n = [0, 1].map((tm) => this.playing.filter((o) => o !== j && o.team === tm).length);
-    j.team = n[0] <= n[1] ? 0 : 1;
+    if (j.team == null) j.team = n[0] <= n[1] ? 0 : 1;
     if (!this.playing.includes(j)) this.playing.push(j);
     this.orig.set(j, '#' + j.color.getHexString());
     j.setLook({ color: TEAM_COLORS[j.team] });
@@ -137,7 +138,9 @@ export class TeamLogic {
   alive(team) { let n = 0; for (const j of this.playing) if (!j.dead && j.team === team) n++; return n; }
 
   state() {
-    return { active: this.active, phase: this.phase, clock: this.clock, wins: this.wins, round: this.round, size: this.size, alive: [this.alive(0), this.alive(1)] };
+    // goIn: segundos que faltan para el ¡YA! (0 si ya se juega): el navegador arranca exacto, sin esperar el aviso
+    const goIn = this.phase === 'intro' ? this.phaseT + COUNT_TIME : this.phase === 'count' ? this.phaseT : 0;
+    return { active: this.active, phase: this.phase, clock: this.clock, wins: this.wins, round: this.round, size: this.size, alive: [this.alive(0), this.alive(1)], goIn: Math.max(0, goIn) };
   }
 
   update(dt) {

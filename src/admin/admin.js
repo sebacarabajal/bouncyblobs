@@ -249,9 +249,10 @@ async function loadRooms() {
       return el('div', { class: 'room' },
         el('div', { class: 'top' }, el('b', {}, `Sala ${rm.id}`), el('span', { class: 'pill' }, modeLabel[rm.mode] || rm.mode)),
         el('div', { class: 'meta' }, `${rm.humans} personas · ${rm.bots} bots · ${rm.alive} vivos · abierta ${ago(rm.created)}`,
-          ts ? ` · ronda ${ts.round} (${ts.wins[0]}–${ts.wins[1]})` : ''),
+          ts ? ` · ronda ${ts.round} (${ts.wins[0]}–${ts.wins[1]})` : '',
+          rm.botLeadMs != null ? el('span', { title: 'Los bots deciden con esta anticipación para que cada navegador reciba sus movimientos antes de que pasen (se ajusta al jugador con más retraso).' }, ` · bots anticipan ${rm.botLeadMs} ms`) : ''),
         bar,
-        rm.players.length ? el('ul', {}, rm.players.map((p) => el('li', {}, p.name, el('span', {}, ` · ${fmt(p.score)} pts · ${p.kos} KO${p.team != null ? (p.team ? ' · Rojo' : ' · Azul') : ''}`)))) : el('div', { class: 'empty' }, 'Sólo bots (nadie jugando).'),
+        rm.players.length ? el('ul', {}, rm.players.map((p) => el('li', {}, p.name, el('span', {}, ` · ${fmt(p.score)} pts · ${p.kos} KO${p.team != null ? (p.team ? ' · Rojo' : ' · Azul') : ''}${p.lagMs != null ? ` · retraso ~${p.lagMs} ms` : ''}`)))) : el('div', { class: 'empty' }, 'Sólo bots (nadie jugando).'),
         btn);
     })));
   } catch {

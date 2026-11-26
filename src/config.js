@@ -26,6 +26,7 @@ export const CONFIG = {
   // Embestida
   dashSpeed: 22,
   dashTime: 0.2,
+  dashWindup: 0.1, // segundos de carga antes de salir disparado (se ve venir, también en línea). 0 = sin carga
   dashCooldown: 1.2,
   airDashBonus: 1.45, // salto + embestida pega más fuerte
 

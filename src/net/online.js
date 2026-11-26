@@ -1,43 +1,54 @@
-// Modo EN LÍNEA del navegador: la partida la corre el servidor (una sala); acá se dibuja.
-// - Tu blob se mueve al instante con tus teclas (predicción local) y se corrige de a poco con lo que dice el
-//   servidor (con ~165 ms de ida y vuelta a Alemania, esperar la respuesta se sentiría pesado).
-// - Los demás se muestran 100 ms "atrás" (INTERP_DELAY), interpolando entre dos fotos: movimiento suave.
-// - Efectos, sonidos, bolitas, aceite y chorros llegan como eventos y se reproducen a su hora.
-// En el navegador, la gelatina "tuya" siempre es jellies[0]: el id del servidor se mapea a ese lugar.
+// Modo EN LÍNEA del navegador: la partida la decide el servidor (una sala); acá se predice y se dibuja.
+//
+// TODOS los blobs se muestran en el mismo momento que el tuyo (el "presente": el paso del servidor en el que va a
+// aplicar la tecla que estás apretando ahora). Tu navegador simula a todos con la MISMA física que el servidor:
+// a vos con tus teclas, y a cada uno de los demás con la última dirección que mandó el servidor. Así lo que ves
+// es lo que choca, y un golpe se ve cuando los dos se tocan (antes los demás se veían ~300 ms en el pasado y los
+// golpes "llegaban de lejos").
+//
+// Cada foto del servidor (30 por segundo) dice cómo estaba todo en su paso S, y que ese paso corresponde a tu paso
+// local ack+since. Para cada blob se compara lo que habías predicho para ese paso con la verdad: la diferencia se
+// le suma al presente (física), la historia se corrige, y lo que se ve se desliza suave (visOff).
+// Los BOTS no se adivinan: el servidor los hace decidir con anticipación y manda cada decisión antes de que se
+// ejecute (con el paso exacto). Tu navegador la aplica en ese mismo paso: sus embestidas salen acá a la vez que allá.
+// Los golpes se predicen (chispas, sonido y rebote al tocarse); el servidor confirma o corrige.
+// Tu navegador ajusta su ritmo un pelito (timeScale) para que en el servidor esperen sólo 2-3 teclas tuyas.
+// En el navegador, tu blob siempre es jellies[0]: el id del servidor se mapea a ese lugar.
 import * as THREE from 'three';
-import { R } from '../jelly.js';
 import { fx } from '../fx.js';
 import { sfx } from '../sfx.js';
-import { STEP, Sim } from '../game/sim.js';
+import { STEP, Sim, hitEffects } from '../game/sim.js';
 import { CONFIG } from '../config.js';
-import { F, INTERP_DELAY } from './protocol.js';
+import { F, decodeSnap } from './protocol.js';
 import { TEAM_COLORS } from '../game/teamlogic.js';
 
+const HIST = 256; // pasos de historia (~2 s)
+const HS = 7; // por paso: posición (3), velocidad (3), energía
+const QUEUE_TARGET = 3; // teclas tuyas esperando en el servidor (colchón contra los saltos de la red)
 const _v = new THREE.Vector3();
-const _white = new THREE.Color('#fff6d0');
 const STILL = { mx: 0, mz: 0, jump: false, jumpHeld: false, dash: false, sprint: false, throw: null };
 const NOOP_SHOTS = { hit() {}, land() {} };
 
 const dec = (a) => (Array.isArray(a) ? (a[0] === 'V' ? new THREE.Vector3(a[1], a[2], a[3]) : a[0] === 'C' ? new THREE.Color(a[1]) : a) : a);
 const angLerp = (a, b, k) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k;
+const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
 export class Online {
-  // sim: la partida local (sólo se usan sus objetos: blobs, arena, bolitas…) · ui: callbacks de main.js
+  static chainMode = 1; // carambolas: 0 no se predicen · 1 sí, pero no en cadena sin confirmar · 2 siempre · 3 sólo confirmadas
+  // sim: la partida local (se usan sus objetos: blobs, arena, bolitas…) · ui: callbacks de main.js
   constructor(sim, ui) {
     this.sim = sim;
-    this.ui = ui; // { slice, shake, teamEvent, roster, lost, welcome }
+    this.ui = ui; // { slice, shake, teamEvent, roster, lost }
     this.active = false;
     this.ws = null;
-    this.snaps = [];
-    this.events = [];
-    this.seq = 0;
-    this.history = [];
-    this.corr = new THREE.Vector3();
-    this.rt = 0; // tiempo del servidor que se está mostrando (para los demás)
-    this.offset = 0; // tiempo del servidor - tiempo local
-    this.edges = { jump: false, dash: false, throw: null };
-    this.tm = null;
     this.rtt = 0;
+    this.timeScale = 1;
+    this.tm = null;
+    this.stats = this._emptyStats();
+  }
+
+  _emptyStats() {
+    return { snaps: 0, corr: 0, corrN: 0, corrMax: 0, hard: 0, predicted: 0, confirmed: 0, serverHits: 0, unpredicted: 0, meHitPred: 0, meHitServer: 0, meHitUnpred: 0, queue: 0, bytes: 0, planOk: 0, planLate: 0, lead: 0, corrO: 0, corrON: 0, big: 0, bigO: 0 };
   }
 
   // ---------------------------------------------------------------- conexión
@@ -45,15 +56,17 @@ export class Online {
     return new Promise((resolve, reject) => {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       const ws = new WebSocket(`${proto}://${location.host}/ws`);
+      ws.binaryType = 'arraybuffer';
       this.ws = ws;
       let welcomed = false;
       const timer = setTimeout(() => { if (!welcomed) { ws.close(); reject(new Error('timeout')); } }, 10000);
       ws.onopen = () => ws.send(JSON.stringify({ t: 'join', mode, look, room }));
       ws.onmessage = (e) => {
+        if (typeof e.data !== 'string') { if (this.active) this._snap(e.data); return; }
         let m;
         try { m = JSON.parse(e.data); } catch { return; }
         if (m.t === 'welcome') { welcomed = true; clearTimeout(timer); this._welcome(m); resolve(m); }
-        else if (m.t === 's') this._snap(m);
+        else if (m.t === 'x') this._meta(m);
         else if (m.t === 'roster') this._roster(m.list);
         else if (m.t === 'pong') { this.rtt = performance.now() / 1000 - m.c; }
         else if (m.t === 'full') { clearTimeout(timer); reject(new Error('full')); ws.close(); }
@@ -77,12 +90,13 @@ export class Online {
     if (!this.active) { this.ws = null; return; }
     this.active = false;
     this.ws = null;
+    this.timeScale = 1;
     clearInterval(this._ping);
-    for (const j of this.sim.jellies) { j.setRemote(false); j.collider.setSensor(false); j.netId = null; }
-    this.sim.pickups.remote = false;
-    this.sim.pickups.clear();
-    this.sim.oil.clear();
-    this.sim.shots.clear();
+    const sim = this.sim;
+    for (const j of sim.jellies) { j.setRemote(false); j.collider.setSensor(false); j.netId = null; j.netCmd = null; j.netPlan = null; j.visOff?.set(0, 0, 0); }
+    sim.pickups.remote = false;
+    sim.pickups.clear(); sim.oil.clear(); sim.shots.clear();
+    sim.oil.friendly = this._oilFriendly; sim.shots.friendly = this._shotsFriendly;
   }
 
   // id del servidor ↔ lugar en el navegador (el tuyo siempre en jellies[0])
@@ -94,25 +108,42 @@ export class Online {
     this.you = m.you;
     this.room = m.room;
     this.active = true;
-    this.snaps = []; this.events = []; this.history = []; this.corr.set(0, 0, 0);
+    this.stats = this._emptyStats();
+    this.stepSeq = 0; // tus pasos locales (cada uno con su tecla)
+    this._byId = null;
+    this.out = [];
+    this.presentStep = m.step; // el paso del servidor que estás mostrando
+    sim.time = this.presentStep * STEP;
+    this.timeScale = 1;
+    this._lastReps = 0;
     this._introShown = false;
-    this.out = []; this.stepSeq = 0;
-    this._firstOwn = true;
-    this.offset = m.time - performance.now() / 1000;
-    this.rt = m.time - INTERP_DELAY;
-    this.tm = m.tm;
+    this.predicted = []; // golpes que predijiste: { att, vic, step }
+    this.bumpAt = new Map();
+    // historia: por blob, posición y velocidad en cada paso local
+    this.histSeq = new Int32Array(HIST).fill(-1);
+    this.hist = sim.jellies.map(() => new Float32Array(HIST * HS).fill(NaN));
+    this.lead = 0; this._leadMax = 0; this._leadPrev = 0; this._leadT = performance.now(); // cuántos pasos vas adelantado
+    // después de ubicar un blob "de golpe" (apareció, se fue muy lejos), las fotos que hablan de antes de ese
+    // momento ya no sirven para corregirlo: se ignoran hasta que lleguen las de después (si no, salta en cada foto)
+    this.barrier = new Int32Array(sim.jellies.length);
+    this._setTeams(m.tm, m.step);
     sim.teams.stop(); // en línea la lógica de equipos es la del servidor
     sim.pickups.remote = true;
     sim.pickups.clear(); sim.oil.clear(); sim.shots.clear();
     for (const p of m.pickups) sim.pickups.addRemote(p);
-    this.bodyMode ||= 'dyn'; // los demás: empujables y persiguiendo su lugar (medido: el que menos corrige; 'kin' = inamovibles, 'ghost' = no chocan)
+    // aceite y chorro: en equipos no afectan a los compañeros (el equipo lo dice el servidor)
+    this._oilFriendly = sim.oil.friendly; this._shotsFriendly = sim.shots.friendly;
+    const friendly = (owner, j) => !!owner && owner.team != null && owner.team === j.team;
+    sim.oil.friendly = friendly; sim.shots.friendly = friendly;
     sim.jellies.forEach((j, i) => {
       j.netId = this._idx(i);
-      j.setRemote(i !== 0 && this.bodyMode !== 'dyn');
-      if (i !== 0) j.collider.setSensor(this.bodyMode === 'ghost');
+      j.netCmd = null; j.netPlan = null;
+      j.setRemote(false); // todos son cuerpos normales: se simulan acá con la misma física
+      j.collider.setSensor(false);
+      j.visOff?.set(0, 0, 0);
     });
     this._roster(m.roster);
-    if (m.ar) sim.arena.setState?.(m.ar, m.time);
+    if (m.ar) sim.arena.setState?.(m.ar, sim.time);
     this._ping = setInterval(() => this._send({ t: 'ping', c: performance.now() / 1000 }), 2000);
   }
 
@@ -145,283 +176,462 @@ export class Online {
 
   _send(m) { if (this.ws?.readyState === 1) this.ws.send(JSON.stringify(m)); }
 
-  // ---------------------------------------------------------------- fotos del servidor
-  _snap(m) {
+  // ---------------------------------------------------------------- historia (por blob, por paso local)
+  _record() {
+    const slot = this.stepSeq % HIST;
+    this.histSeq[slot] = this.stepSeq;
+    const js = this.sim.jellies, o = slot * HS;
+    for (let i = 0; i < js.length; i++) {
+      const j = js[i], h = this.hist[i];
+      if (j.dead || j.impaled || j.benched) { h[o] = NaN; continue; }
+      const v = j.body.linvel();
+      h[o] = j.pos.x; h[o + 1] = j.pos.y; h[o + 2] = j.pos.z; h[o + 3] = v.x; h[o + 4] = v.y; h[o + 5] = v.z; h[o + 6] = j.energy;
+    }
+  }
+
+  _histAt(i, seq) {
+    const slot = ((seq % HIST) + HIST) % HIST;
+    if (this.histSeq[slot] !== seq) return -1;
+    const o = slot * HS;
+    return Number.isNaN(this.hist[i][o]) ? -1 : o;
+  }
+
+  // ---------------------------------------------------------------- fotos del servidor (binario)
+  _snap(buf) {
     const t0 = performance.now();
-    this._snapT = t0;
-    const now = performance.now() / 1000;
-    // reloj del servidor: se ajusta de a poco (si se va muy lejos, de golpe)
-    const target = m.time - now;
-    if (Math.abs(target - this.offset) > 0.5) this.offset = target; else this.offset += (target - this.offset) * 0.08;
-    const b = new Map();
-    for (const a of m.b) b.set(a[0], a);
-    this.snaps.push({ time: m.time, b, tm: m.tm, ar: m.ar, ack: m.ack });
-    if (m.dbg) this._lastDbg = m.dbg;
-    if (this.snaps.length > 40) this.snaps.shift();
-    for (const e of m.ev) this.events.push(e);
-    this._own(m);
-    this.netMs = (this.netMs || 0) + performance.now() - t0; // para el registro de rendimiento
+    const d = decodeSnap(buf);
+    const st = this.stats;
+    st.snaps++; st.bytes += buf.byteLength; st.queue = d.queue;
+    // tu ritmo: que en el servidor esperen ~3 teclas tuyas (ni más, que es atraso; ni 0, que repite la última)
+    const underflow = d.reps !== this._lastReps;
+    this._lastReps = d.reps;
+    let scale = 1 - (d.queue - QUEUE_TARGET) * 0.01;
+    if (underflow && d.queue === 0) scale = Math.max(scale, 1.03);
+    this.timeScale = clamp(scale, 0.94, 1.05);
+    // a qué paso tuyo corresponde la foto, y cuántos pasos vas adelantado
+    const local = d.ack + d.since;
+    const N = clamp(this.stepSeq - local, 0, HIST - 8);
+    this.presentStep = d.step + N;
+    this.sim.time = this.presentStep * STEP;
+    this._snapStep = d.step;
+    // cuánto vas adelantado (lo peor de los últimos ~2 s): se le avisa al servidor para que los bots decidan con
+    // al menos esa anticipación (si no, sus decisiones te llegan tarde)
+    this._leadMax = Math.max(this._leadMax, N);
+    if (t0 - this._leadT > 1000) { this.lead = Math.max(this._leadMax, this._leadPrev); this._leadPrev = this._leadMax; this._leadMax = 0; this._leadT = t0; st.lead = this.lead; }
+    for (const b of d.b.values()) {
+      const j = this.jelly(b.id);
+      if (j) this._apply(j, this._idx(b.id), b, N, local);
+    }
+    this._checkPredicted();
+    this.netMs = (this.netMs || 0) + performance.now() - t0;
   }
 
-  // tu blob: lo que diga el servidor manda en todo, salvo la posición (que se corrige de a poco)
-  _own(m) {
-    const me = this.sim.jellies[0];
-    const a = m.b.find((x) => x[0] === this.you);
-    if (!a) return;
-    const flags = a[10];
-    const dead = !!(flags & F.dead) || !!(flags & F.out);
-    if (dead && !me.dead) { me.kill(); this.history = []; return; }
-    if (dead) return;
-    if (me.dead) { me.respawn(_v.set(a[1], a[2], a[3])); this.history = []; this.corr.set(0, 0, 0); }
-    else if (this._firstOwn) { // primera foto: tu blob, directo a donde te puso el servidor
-      me.body.setTranslation({ x: a[1], y: a[2], z: a[3] }, true);
-      me.body.setLinvel({ x: a[4], y: a[5], z: a[6] }, true);
-      me.pos.set(a[1], a[2], a[3]); me.prevPos.copy(me.pos); me.renderPos.copy(me.pos);
-      this.history = []; this.corr.set(0, 0, 0);
-    }
-    this._firstOwn = false;
-    this._fields(me, a, true);
-    if (!this._introShown && m.tm?.active && me.team != null) { // entraste en equipos: de qué equipo sos
-      this._introShown = true;
-      this.ui.teamEvent?.('intro', { round: 1, wins: m.tm.wins });
-    }
-    if (flags & F.impaled) return;
-    // posición: comparar con lo que habías predicho para esa misma tecla (ack) y corregir la diferencia
-    // el mismo instante: el servidor dice hasta qué paso tuyo aplicó (ack); la historia guarda cada paso
-    const h = this.history.find((x) => x.seq === m.ack);
-    if (!h) return;
-    const ex = a[1] - h.x, ey = a[2] - h.y, ez = a[3] - h.z;
-    const err = Math.hypot(ex, ey, ez);
-    const st = this.errStats ||= { n: 0, sum: 0, max: 0, snaps: 0 }; // cuánto corrige el servidor (para medir)
-    st.n++; st.sum += err; st.max = Math.max(st.max, err); if (err > 4) st.snaps++;
-    if (err > 4) { // demasiado lejos (te tiraron, reapareciste…): directo a donde está
-      me.body.setTranslation({ x: a[1], y: a[2], z: a[3] }, true);
-      me.body.setLinvel({ x: a[4], y: a[5], z: a[6] }, true);
-      me.pos.set(a[1], a[2], a[3]); me.prevPos.copy(me.pos);
-      me.visOff?.set(0, 0, 0); this.history = [];
-      return;
-    }
-    if (err < 0.02) return;
-    // la física se corrige YA (sumando la diferencia, no reemplazando: tu blob siguió moviéndose desde entonces)
-    // y la historia de los pasos siguientes también, así la próxima foto no vuelve a corregir lo mismo.
-    // Lo que se ve se desliza suave (visOff), así no hay saltos.
-    const t = me.body.translation();
-    me.body.setTranslation({ x: t.x + ex, y: t.y + ey, z: t.z + ez }, true);
-    me.pos.x += ex; me.pos.y += ey; me.pos.z += ez;
-    me.prevPos.x += ex; me.prevPos.y += ey; me.prevPos.z += ez;
-    (me.visOff ||= new THREE.Vector3()).x -= ex; me.visOff.y -= ey; me.visOff.z -= ez;
-    for (const x of this.history) if (x.seq > m.ack) { x.x += ex; x.y += ey; x.z += ez; }
-    // un golpe que no predijiste (te embistieron): sumar la diferencia de velocidad de ese momento
-    const dvx = a[4] - h.vx, dvy = a[5] - h.vy, dvz = a[6] - h.vz;
-    if (Math.hypot(dvx, dvy, dvz) > 6) {
-      const v = me.body.linvel();
-      me.body.setLinvel({ x: v.x + dvx, y: v.y + dvy, z: v.z + dvz }, true);
-      for (const x of this.history) if (x.seq > m.ack) { x.vx += dvx; x.vy += dvy; x.vz += dvz; }
-    }
-  }
-
-  // los datos que no son posición (masa, daño, poderes, armas, puntos…)
-  _fields(j, a, own) {
-    j.mass = a[8];
-    j.damage = a[9];
-    const flags = a[10];
-    if (!own) {
-      j.energy = a[11];
-      j.dashTimer = flags & F.dashing ? 0.05 : 0;
-      j.airDash = !!(flags & F.airDash);
-      j.sprinting = !!(flags & F.sprint);
-      j.grounded = !!(flags & F.grounded);
-      if (a[12] > 0 && j.daze <= 0) j.dazeT = 0;
-      j.daze = a[12];
-      j.stun = a[13];
-    } else {
-      // tu blob: energía, mareo y aturdimiento los predice tu navegador (la foto llega con ~160 ms de atraso:
-      // copiarlos "devolvería" energía ya gastada y correrías de más). El servidor sólo manda si es algo nuevo (un golpe).
-      if (Math.abs(a[11] - j.energy) > 35) j.energy = a[11];
-      if (a[12] > j.daze + 0.3) { if (j.daze <= 0) j.dazeT = 0; j.daze = a[12]; }
-      if (a[13] > j.stun + 0.1) j.stun = a[13];
-    }
-    j.buffs.turbo = a[14]; j.buffs.strength = a[15];
-    j.ammo.oil = a[16]; j.ammo.spit = a[17];
-    j.score = a[18]; j.kos = a[19]; j.falls = a[20];
-    const team = a[21] >= 0 ? a[21] : null;
+  _apply(j, i, b, N, local) {
+    const own = i === 0, flags = b.flags, ahead = N * STEP;
+    j.human = !!(flags & F.human);
+    // equipo y puntos valen aunque esté muerto (en equipos, muerto se espera la ronda siguiente)
+    const team = b.team >= 0 ? b.team : null;
     if (team !== j.team) { j.team = team; j.setLook({ color: team != null ? TEAM_COLORS[team] : j.look?.color || '#' + j.color.getHexString() }); this.ui.roster?.(); }
-    j.oilT = a[22];
-    if (!own && (flags & F.impaled) && !j.impaled) j.impaledT = a[23];
-  }
-
-  // ---------------------------------------------------------------- cada paso de física (1/120 s)
-  step(pc, doSkin) {
-    const sim = this.sim, me = sim.jellies[0];
-    // tiempo que se muestra: avanza con el reloj local y se acerca de a poco al del servidor (menos el retardo)
-    this.rt += STEP;
-    const want = performance.now() / 1000 + this.offset - INTERP_DELAY;
-    if (Math.abs(want - this.rt) > 0.3) this.rt = want; else this.rt += (want - this.rt) * 0.02;
-    sim.time = this.rt;
-    // la tecla de este paso (numerado): se manda en el próximo envío, y el servidor la aplica en este mismo orden
-    this.stepSeq = (this.stepSeq || 0) + 1;
-    const frozenNow = this.tm?.phase === 'intro' || this.tm?.phase === 'count';
-    const flags = (pc.jumpHeld ? 1 : 0) | (pc.sprint ? 2 : 0) | (pc.jump ? 4 : 0) | (pc.dash ? 8 : 0) | (pc.throw === 'oil' ? 16 : pc.throw === 'spit' ? 32 : 0);
-    (this.out ||= []).push([this.stepSeq, +pc.mx.toFixed(3), +pc.mz.toFixed(3), frozenNow ? 0 : flags]);
-
-    const [s0, s1, k] = this._bracket(this.rt);
-    const frozen = this.tm?.phase === 'intro' || this.tm?.phase === 'count';
-    sim.arena.preStep(STEP, this.rt);
-    // los demás: a la posición interpolada (cuerpos cinemáticos)
-    for (let i = 1; i < sim.jellies.length; i++) this._remote(sim.jellies[i], s0, s1, k);
-    // vos: predicción con tus teclas
-    if (!me.dead && !me.impaled) {
-      me.control(STEP, frozen ? STILL : pc);
+    j.score = b.score; j.kos = b.kos; j.falls = b.falls;
+    if (flags & F.out) { j.benched = true; if (!j.dead) j.kill(); return; }
+    j.benched = false;
+    if (flags & F.dead) { if (!j.dead) j.kill(); j.netPlan = null; return; }
+    if (j.dead) { // reapareció: directo a donde está (proyectado al presente)
+      j.respawn(_v.set(b.x + b.vx * ahead, b.y, b.z + b.vz * ahead));
+      j.body.setLinvel({ x: b.vx, y: b.vy, z: b.vz }, true);
+      j.yaw = j.targetYaw = b.yaw;
+      j.visOff?.set(0, 0, 0);
+      this.barrier[i] = this.stepSeq;
     }
-    if (me.visOff) me.visOff.multiplyScalar(me.visOff.lengthSq() > 1 ? 0.95 : 0.9); // lo que se ve alcanza a la física de a poco (más despacio si fue grande)
-    sim.world.step();
-    if (!me.dead) me.postStep(STEP);
-    if (this.predictHits !== false) this._predictHits(me);
-    if (!me.dead && !me.impaled) {
-      const v = me.body.linvel();
-      this.history.push({ seq: this.stepSeq, x: me.pos.x, y: me.pos.y, z: me.pos.z, vx: v.x, vy: v.y, vz: v.z });
-      if (this.history.length > 240) this.history.shift();
+    this._fields(j, b, ahead, own);
+    if (!own) {
+      j.netCmd = { mx: b.mx, mz: b.mz, jumpHeld: !!(b.cmdFlags & 1), sprint: !!(b.cmdFlags & 2), jump: false, dash: false, throw: null };
+      if (b.p1 && !j.human) this._mergePlan(j, b); else j.netPlan = null;
+      // hacia dónde mira: un bot con plan gira acá igual que allá (la foto es de hace un rato: no se lo tira para atrás)
+      const dy = Math.atan2(Math.sin(b.yaw - j.yaw), Math.cos(b.yaw - j.yaw));
+      if (!j.netPlan || Math.abs(dy) > 1.2) j.yaw = angLerp(j.yaw, b.yaw, 0.35);
     }
-    if (s1?.ar) sim.arena.setState?.(s1.ar, this.rt);
-    if (s1) this.tm = s1.tm;
-    sim.pickups.step(STEP, sim.arena, [], () => {});
-    sim.oil.step(STEP, [], this.rt);
-    sim.shots.step(STEP, sim.jellies, NOOP_SHOTS);
-    this._playEvents();
-    if (doSkin) for (const j of sim.jellies) j.skin(STEP);
-  }
-
-  // una vez por frame: mandar las teclas (con lo que se apretó desde el envío anterior)
-  sendInput() {
-    if (!this.active || !this.out?.length) return;
-    this._send({ t: 'in', l: this.out });
-    this.out = [];
-  }
-
-  _bracket(t) {
-    const S = this.snaps;
-    if (!S.length) return [null, null, 0];
-    let i = S.length - 1;
-    while (i > 0 && S[i - 1].time > t) i--;
-    const s1 = S[i], s0 = S[i - 1] || s1;
-    if (t >= S[S.length - 1].time) return [S[S.length - 1], S[S.length - 1], 1];
-    const k = s1.time > s0.time ? Math.min(1, Math.max(0, (t - s0.time) / (s1.time - s0.time))) : 1;
-    // las fotos viejas ya no hacen falta
-    while (this.snaps.length > 2 && this.snaps[1].time < t - 1) this.snaps.shift();
-    return [s0, s1, k];
-  }
-
-  _remote(j, s0, s1, k) {
-    if (!s1) return;
-    const sid = j.netId;
-    const a1 = s1.b.get(sid), a0 = s0.b.get(sid) || a1;
-    if (!a1) return;
-    const flags = a1[10];
-    const out = !!(flags & F.out);
-    j.benched = out;
-    if ((flags & F.dead) || out) { if (!j.dead) j.kill(); return; }
-    if (j.dead) { j.respawn(_v.set(a1[1], a1[2], a1[3])); j.setRemote(this.bodyMode !== 'dyn'); }
-    this._fields(j, a1, false);
-    if (j.impaled) { j.impaledT = a1[23]; return; }
-    // si en la foto anterior estaba muerto (o se teletransportó: reapareció, formación de equipos), va directo:
-    // interpolar lo haría "volar" desde donde murió hasta donde reapareció
-    const jump = (a0[10] & (F.dead | F.out)) || Math.hypot(a1[1] - a0[1], a1[3] - a0[3]) > 8;
-    if (jump) k = 1;
-    const x = a0[1] + (a1[1] - a0[1]) * k, y = a0[2] + (a1[2] - a0[2]) * k, z = a0[3] + (a1[3] - a0[3]) * k;
-    if (jump) j.pos.set(x, y, z);
-    j.prevPos.copy(j.pos);
-    j.pos.set(x, y, z); // lo que se VE: interpolado (suave)
-    // para los CHOQUES con tu blob: donde va a estar cuando el servidor procese tu tecla (la última foto
-    // proyectada con su velocidad). Si chocaras contra donde se ve, chocarías con alguien que ya se movió.
-    const last = this.snaps[this.snaps.length - 1];
-    const al = last?.b.get(sid);
-    j.netVel = al ? { x: al[4], y: al[5], z: al[6] } : null;
-    let tx = x, ty = y, tz = z;
-    if (al && !(al[10] & F.dead)) {
-      const ahead = Math.min(0.35, Math.max(0, performance.now() / 1000 + this.offset - last.time + this.rtt / 2 + 0.07));
-      tx = al[1] + al[4] * ahead; ty = al[2]; tz = al[3] + al[6] * ahead;
+    if (flags & F.impaled) { if (!j.impaled) j.impaledT = b.impaledT; return; }
+    if (j.impaled) return;
+    if (own && !this._introShown && this.tm?.active && j.team != null) { // entraste en equipos: de qué equipo sos
+      this._introShown = true;
+      this.ui.teamEvent?.('intro', { round: 1, wins: this.tm.wins });
     }
-    if (this.bodyMode === 'dyn') {
-      // cuerpo normal (tu blob lo puede empujar), que persigue su lugar con la velocidad del servidor
-      const b = j.body.translation(), ov = j.netVel || { x: 0, y: 0, z: 0 };
-      if (Math.hypot(tx - b.x, tz - b.z) > 3) j.body.setTranslation({ x: tx, y: ty, z: tz }, true);
-      j.body.setLinvel({ x: ov.x + (tx - b.x) * 8, y: ov.y + (ty - b.y) * 8, z: ov.z + (tz - b.z) * 8 }, true);
-    } else j.body.setNextKinematicTranslation({ x: tx, y: ty, z: tz });
-    j.yaw = angLerp(a0[7], a1[7], k);
-    j.targetYaw = j.yaw;
-    // tamaño según la masa (como hace control() en tu blob)
-    j.size += (Math.cbrt(j.mass) - j.size) * 0.05;
-    if (Math.abs(j.size - j.colSize) > 0.004) { j.collider.setRadius(R * j.size); j.colSize = j.size; }
-    if (j.daze > 0) j.dazeT += STEP;
-    // decoración que no viaja por la red: estela de la embestida y polvo al correr
-    if (j.dashing && Math.random() < 0.5) fx.burst(_v.set(x, y - 0.4 * j.size, z), j.airDash ? _white : j.color, j.airDash ? 2 : 1, 1.5, null, 0.07 * j.size);
-    else if (j.sprinting && j.grounded && Math.random() < 0.25) fx.burst(_v.set(x, y - j.r + 0.15, z), j.color, 1, 2, null, 0.06 * j.size);
-    if (j.impaled && Math.random() < STEP * 6) fx.burst(_v.set(x, y - j.r * 0.3, z), j.color, 1, 1, null, 0.07);
+    if (local <= this.barrier[i]) return; // foto de antes de que lo ubicaras: ya no sirve para corregir
+    // lo que habías predicho para ese paso vs. la verdad
+    const o = this._histAt(i, local);
+    const h = this.hist[i];
+    if (o < 0) { this._hardSet(j, i, b, ahead); return; }
+    const ex = b.x - h[o], ey = b.y - h[o + 1], ez = b.z - h[o + 2];
+    const err = Math.hypot(ex, ey, ez);
+    const st = this.stats;
+    if (own) {
+      st.corr += err; st.corrN++; st.corrMax = Math.max(st.corrMax, err);
+      if (err > 0.5) {
+        st.big++;
+        if (this.debug) {
+          let near = Infinity;
+          for (const o2 of this.sim.jellies) if (o2 !== j && !o2.dead && !o2.benched) near = Math.min(near, o2.pos.distanceTo(j.pos) - o2.r - j.r);
+          (st.bigList ||= []).push({ err, daze: j.daze > 0, oil: j.oilT > 0 || !!j.slipActive, stun: j.stun > 0, hitMe: local - (this._meHitLocal ?? -1e9), near });
+        }
+      }
+    }
+    else { st.corrO += err; st.corrON++; if (err > 0.5) st.bigO++; }
+    if (err > 6) { this._hardSet(j, i, b, ahead); if (own) this.stats.hard++; return; }
+    { // energía: igual que la posición (la diferencia con lo predicho para ese paso)
+      const de = b.energy - h[o + 6];
+      if (Math.abs(de) > 1) { j.energy = clamp(j.energy + de, 0, 100); this._shiftHist1(i, local, 6, de); }
+    }
+    if (err > 0.005) {
+      // la física se corrige ya (sumando la diferencia: el blob siguió moviéndose desde entonces), la historia
+      // de los pasos siguientes también (así la próxima foto no corrige lo mismo), y lo que se ve se desliza
+      const t = j.body.translation();
+      j.body.setTranslation({ x: t.x + ex, y: t.y + ey, z: t.z + ez }, true);
+      j.pos.x += ex; j.pos.y += ey; j.pos.z += ez;
+      j.prevPos.x += ex; j.prevPos.y += ey; j.prevPos.z += ez;
+      (j.visOff ||= new THREE.Vector3()).x -= ex; j.visOff.y -= ey; j.visOff.z -= ez;
+      this._shiftHist(i, local, ex, ey, ez, 0);
+    }
+    // velocidad: a los demás siempre (cambiaron de dirección); a vos, sólo si fue un golpe que no predijiste
+    const dvx = b.vx - h[o + 3], dvy = b.vy - h[o + 4], dvz = b.vz - h[o + 5];
+    const dv = Math.hypot(dvx, dvy, dvz);
+    if ((own && dv > 6) || (!own && dv > 0.25)) {
+      const v = j.body.linvel();
+      j.body.setLinvel({ x: v.x + dvx, y: v.y + dvy, z: v.z + dvz }, true);
+      this._shiftHist(i, local, dvx, dvy, dvz, 3);
+    }
   }
 
-  // Golpes de TU blob, predichos (la misma fórmula que el servidor): si tu embestida pega, rebotás ya; si te
-  // embisten, salís volando ya. Sin esto el golpe se sentía 160 ms tarde y después "te corría" de golpe.
-  // Si el servidor no coincide, lo corrige como siempre.
-  _predictHits(me) {
-    if (me.dead || me.impaled) return;
-    for (const o of this.sim.jellies) {
-      if (o === me || o.dead || o.benched || !o.netVel) continue;
-      if (me.team != null && o.team === me.team) continue;
-      const bp = o.body.translation(); // donde va a estar para el servidor (ver _remote)
-      const dx = bp.x - me.pos.x, dy = bp.y - me.pos.y, dz = bp.z - me.pos.z, d = Math.hypot(dx, dy, dz);
-      if (d > me.r + o.r + 0.25 || d < 1e-4) continue;
-      const hl = Math.hypot(dx, dz) || 1, nx = dx / hl, nz = dz / hl;
-      const ov = o.netVel;
-      if (me.dashing) {
-        const closing = (me.vBefore.x - ov.x) * nx + (me.vBefore.z - ov.z) * nz;
-        if (closing >= 6) { me.dashTimer = 0; const r = 4 / Math.sqrt(me.mass); me.knockback(-nx * r, 3, -nz * r, 0.12); }
-      } else if (o.dashing && this.rt - (o._hitAt || -9) > 0.4) {
-        const closing = (ov.x - me.vBefore.x) * -nx + (ov.z - me.vBefore.z) * -nz;
-        if (closing >= 6) {
-          o._hitAt = this.rt;
-          const { K } = Sim.hitForce(o.mass, me.mass, me.damage, closing, o.airDash, o.buffs.strength > 0, me.daze > 0);
-          me.knockback(-nx * K, 3 + K * CONFIG.knockLift, -nz * K, CONFIG.stunBase + K * CONFIG.stunPerForce);
+  _shiftHist1(i, from, off, a) {
+    const h = this.hist[i];
+    for (let s = from + 1; s <= this.stepSeq; s++) { const o = this._histAt(i, s); if (o >= 0) h[o + off] += a; }
+  }
+
+  _shiftHist(i, from, ax, ay, az, off) {
+    const h = this.hist[i];
+    for (let s = from + 1; s <= this.stepSeq; s++) {
+      const o = this._histAt(i, s);
+      if (o < 0) continue;
+      h[o + off] += ax; h[o + off + 1] += ay; h[o + off + 2] += az;
+    }
+  }
+
+  // sin historia (recién aparecido) o diferencia enorme: directo a la verdad, proyectada al presente
+  _hardSet(j, i, b, ahead) {
+    const x = b.x + b.vx * ahead, z = b.z + b.vz * ahead;
+    j.body.setTranslation({ x, y: b.y, z }, true);
+    j.body.setLinvel({ x: b.vx, y: b.vy, z: b.vz }, true);
+    j.pos.set(x, b.y, z); j.prevPos.copy(j.pos);
+    j.visOff?.set(0, 0, 0);
+    if (i !== 0) j.energy = b.energy;
+    this.barrier[i] = this.stepSeq;
+  }
+
+  // las decisiones de un bot (las 2 últimas de cada foto), ordenadas por el paso en que se ejecutan
+  _mergePlan(j, b) {
+    const L = (j.netPlan ||= []), P = this.presentStep;
+    while (L.length && L[L.length - 1].at > b.p1.at) L.pop(); // (el servidor las reemplazó: bajó la anticipación)
+    for (const p of [b.p2, b.p1]) {
+      if (!p) continue;
+      let k = L.length - 1;
+      while (k >= 0 && L[k].at > p.at) k--;
+      if (k >= 0 && L[k].at === p.at) continue; // ya la tenías
+      p.late = p.at <= P; // llegó cuando ya pasó: sus botones no se aplican (la foto lo corrige)
+      if (p.late) this.stats.planLate++; else this.stats.planOk++;
+      L.splice(k + 1, 0, p);
+    }
+    while (L.length > 1 && L[1].at <= P - 12) L.shift();
+  }
+
+  // el comando de un bot en este paso: su última decisión que ya tocaba (los botones, sólo en su paso exacto)
+  _planCmd(j) {
+    const L = j.netPlan;
+    if (!L || !L.length) return null;
+    const P = this.presentStep;
+    let e = null;
+    for (let k = L.length - 1; k >= 0; k--) if (L[k].at <= P) { e = L[k]; break; }
+    if (!e) return null;
+    const c = (j._planCmd ||= { ...STILL });
+    c.mx = e.mx; c.mz = e.mz; c.jumpHeld = !!(e.f & 1); c.sprint = !!(e.f & 2);
+    const fire = !e.late && !e.fired;
+    c.jump = fire && !!(e.f & 4); c.dash = fire && !!(e.f & 8); c.throw = null;
+    e.fired = true;
+    return c;
+  }
+
+  // los datos que no son posición (masa, daño, poderes, armas, puntos…), "envejecidos" hasta el presente
+  _fields(j, b, ahead, own) {
+    j.mass = b.mass;
+    j.damage = b.damage;
+    j.buffs.turbo = Math.max(0, b.turbo - ahead); j.buffs.strength = Math.max(0, b.strength - ahead);
+    j.ammo.oil = b.oil; j.ammo.spit = b.spit;
+    if (!own) {
+      // aturdimiento y mareo: los del servidor, envejecidos; si tu navegador le predijo un golpe DESPUÉS de la
+      // foto, el suyo es más nuevo y se respeta
+      const S = this._snapStep, fresh = (j.hitAt ?? -1) > S;
+      const stun = Math.max(0, b.stun - ahead);
+      j.stun = fresh ? Math.max(j.stun, stun) : stun;
+      const daze = Math.max(0, b.daze - ahead);
+      if (daze > 0) j.dazeT = b.dazeT + ahead;
+      j.daze = fresh ? Math.max(j.daze, daze) : daze;
+      j.oilT = Math.max(j.oilT, b.oilT - ahead);
+      this._dashSync(j, b, ahead, S);
+    } else {
+      // tu blob: mareo, aturdimiento y aceite los predice tu navegador; el servidor sólo manda si es algo nuevo
+      // (envejecido hasta tu presente: si no, te quedaba mareado o aturdido más tiempo que allá)
+      const dz = b.daze - ahead, sn = b.stun - ahead, ol = b.oilT - ahead;
+      if (dz > j.daze + 0.3) j.daze = dz;
+      if (dz > 0 && j.daze > 0) j.dazeT = b.dazeT + ahead; // camina "borracho" igual que allá
+      if (sn > j.stun + 0.1) j.stun = sn;
+      if (ol > j.oilT + 0.1) j.oilT = ol;
+    }
+  }
+
+  // carga y embestida de los demás. Lo que la foto dice de ANTES de su paso manda; lo que tu navegador ya hizo
+  // DESPUÉS (un bot que salió en el paso de su plan) se respeta. wuAt/dashAt: paso del servidor en que empezó acá.
+  _dashSync(j, b, ahead, S) {
+    if ((j.hitAt ?? -1) > S) return; // acá ya chocó DESPUÉS de esa foto (golpe predicho): la foto es vieja para esto
+    const wuLocal = j.windup > 0, dashLocal = j.dashTimer > 0;
+    if (b.windup > 0) { // cargando: se sabe hacia dónde y cuándo sale
+      if (dashLocal && !wuLocal) return; // acá ya salió (un pelito antes): se deja
+      j.dashDir.set(Math.sin(b.yaw), 0, Math.cos(b.yaw));
+      const wu = b.windup - ahead;
+      if (wu > 0) {
+        if (!wuLocal) { j.squashVel -= 5; j.wuAt = S; j.dashSrc = 'foto'; }
+        j.windup = wu;
+      } else { // ya salió (la noticia llegó tarde)
+        j.windup = 0;
+        if (CONFIG.dashTime + wu > 0) { j.dashTimer = CONFIG.dashTime + wu; j.airDash = !j.grounded; j.dashAt = S; j.dashSrc = 'foto'; }
+      }
+    } else if (b.dashTimer > 0) { // embistiendo: sigue acá en la dirección en que va
+      const left = b.dashTimer - ahead;
+      if (left <= 0) return;
+      if (!dashLocal) {
+        const hl = Math.hypot(b.vx, b.vz);
+        if (hl > 0.5) j.dashDir.set(b.vx / hl, 0, b.vz / hl);
+        j.airDash = !!(b.flags & F.airDash);
+        j.dashAt = S; j.dashSrc = 'foto';
+      }
+      j.windup = 0;
+      j.dashTimer = left;
+    } else { // el servidor no lo hizo: lo que acá empezó antes de la foto era un error
+      if (wuLocal && (j.wuAt ?? -1) <= S) j.windup = 0;
+      if (dashLocal && (j.dashAt ?? -1) <= S) j.dashTimer = 0;
+    }
+  }
+
+  // ---------------------------------------------------------------- eventos y estado de equipos/arena (JSON)
+  _meta(m) {
+    if (!this.active) return;
+    if (m.tm !== undefined) this._setTeams(m.tm, m.step);
+    if (m.ar) this.sim.arena.setState?.(m.ar, this.sim.time);
+    for (const e of m.ev) {
+      try { this._event(e); } catch (err) { console.warn('evento', e[1], err); }
+    }
+  }
+
+  _setTeams(tm, step) {
+    this.tm = tm;
+    // equipos: el ¡YA! es en un paso exacto del servidor (así arrancás justo, sin esperar el aviso)
+    const go = tm?.active && tm.goIn > 0 ? step + Math.round(tm.goIn / STEP) : 0;
+    if (go && Math.abs(go - (this.goStep || 0)) > 3) { this.goStep = go; this._lastCount = null; } // ronda nueva
+  }
+
+  _event(e) {
+    const sim = this.sim, step = e[0], type = e[1];
+    const age = Math.max(0, (this.presentStep - step) * STEP); // hace cuánto pasó (en el presente que mostrás)
+    switch (type) {
+      case 'f': fx[e[2]]?.(...e.slice(3).map(dec)); break;
+      case 'a': {
+        const who = e[3];
+        if (e[2] === 'land') break; // los aterrizajes los arma cada navegador
+        if (who === this.you && (e[2] === 'jump' || e[2] === 'dash')) break; // eso ya sonó (lo predijiste vos)
+        if (e[2] === 'dash' && performance.now() - (this.jelly(who)?.lastLaunch || -1e9) < 500) break; // ya sonó acá (salió de la carga)
+        if (e[2] === 'jump' && performance.now() - (this.jelly(who)?.lastJump || -1e9) < 500) break; // ya sonó acá (el plan del bot)
+        let args = e.slice(4).map(dec);
+        if (['sawWarn', 'sawRise', 'spikesWarn', 'spikesUp'].includes(e[2])) args = [1];
+        sfx[e[2]]?.(...args);
+        break;
+      }
+      case 'hit': this._serverHit(step, e); break;
+      case 'p+': sim.pickups.addRemote({ id: e[2], x: e[3], y: e[4], z: e[5], vx: e[6], vy: e[7], vz: e[8], power: e[9], age }); break;
+      case 'p-': sim.pickups.eatRemote(e[2], this.jelly(e[3])); break;
+      case 'o': sim.oil.spawn(e[2], e[3], this.jelly(e[4]) || null); break;
+      case 's': {
+        const owner = this.jelly(e[3]);
+        if (!owner) break;
+        const pos = dec(e[4]), vel = dec(e[5]);
+        const g = e[2] === 'spit' ? -9 : -30; // adelantado al presente (vuela por donde va ahora)
+        pos.addScaledVector(vel, age); pos.y += 0.5 * g * age * age; vel.y += g * age;
+        sim.shots.spawn(e[2], owner, pos, vel);
+        break;
+      }
+      case 'sl': { const j = this.jelly(e[2]); if (j && !j.dead) { this.ui.slice?.(j, dec(e[3]), dec(e[4])); j.kill(); } break; }
+      case 'im': { const j = this.jelly(e[2]); if (j && !j.dead) { j.impale(dec(e[3]), dec(e[4]), e[5]); j.impaleN = dec(e[4]); } break; }
+      case 'dn': { const j = this.jelly(e[2]); if (j && !j.dead) j.dent(dec(e[3]), e[4], e[5]); break; }
+      case 'sh': this.ui.shake?.(e[2]); break;
+      case 'clr': sim.pickups.clear(); sim.oil.clear(); sim.shots.clear(); break;
+      case 'tm': if (e[2] !== 'count') this.ui.teamEvent?.(e[2], e[3]); break; // la cuenta 3-2-1 la arma cada uno (ver step)
+      default: break;
+    }
+  }
+
+  // ---------------------------------------------------------------- golpes: predichos acá, confirmados por el servidor
+  _enemy(a, b) { return a.team == null || b.team == null || a.team !== b.team; }
+
+  // en el MISMO orden que el servidor (por su número de blob): si dos se embisten a la vez, gana el mismo
+  _localHits() {
+    const js = (this._byId ||= this.sim.jellies.map((_, sid) => this.jelly(sid)));
+    for (let i = 0; i < js.length; i++) {
+      const a = js[i];
+      if (a.dead || a.benched || a.impaled) continue;
+      for (let k = i + 1; k < js.length; k++) {
+        const b = js[k];
+        if (b.dead || b.benched || b.impaled) continue;
+        _v.subVectors(b.pos, a.pos);
+        const d = _v.length();
+        if (d > a.r + b.r + 0.25 || d < 1e-4) continue;
+        _v.divideScalar(d);
+        const aD = a.dashing, bD = b.dashing;
+        if (aD) this._tryHit(a, b, _v);
+        if (bD) this._tryHit(b, a, _v.clone().negate());
+        if (!aD && !bD) {
+          const rel = a.vBefore.dot(_v) - b.vBefore.dot(_v), time = this.sim.time;
+          const key = i * 32 + k;
+          // carambola: como en el servidor (que la cuenta desde 7 m/s); acá sólo las claras, las dudosas las decide allá
+          if (rel > 8.5 && time < (a.flyUntil || 0)) this._chainHit(a, b, _v, rel);
+          else if (rel > 8.5 && time < (b.flyUntil || 0)) this._chainHit(b, a, _v.clone().negate(), rel);
+          else if (rel > 7 && this.presentStep - (this.bumpAt.get(key) || -99) > 30) { this.bumpAt.set(key, this.presentStep); sfx.bump(rel); }
         }
       }
     }
   }
 
-  // ---------------------------------------------------------------- eventos (a su hora: la del blob que se ve)
-  _playEvents() {
-    const E = this.events;
-    let n = 0;
-    while (n < E.length && E[n][0] <= this.rt) n++;
-    if (!n) return;
-    const due = E.splice(0, n);
-    for (const e of due) {
-      try { this._event(e); } catch (err) { console.warn('evento', e[1], err); }
-    }
+  _tryHit(att, vic, n) {
+    if (!att.dashing || !this._enemy(att, vic)) return; // (si recién lo golpeó el otro, ya no embiste: como allá)
+    const closing = att.vBefore.dot(n) - vic.vBefore.dot(n);
+    if (closing < 6) return;
+    const nh = new THREE.Vector3(n.x, 0, n.z).normalize();
+    const { K } = Sim.hitForce(att.mass, vic.mass, vic.damage, closing, att.airDash, att.buffs.strength > 0, vic.daze > 0);
+    vic.knockback(nh.x * K, 3 + K * CONFIG.knockLift, nh.z * K, CONFIG.stunBase + K * CONFIG.stunPerForce);
+    att.dashTimer = 0;
+    const recoil = 4 / Math.sqrt(att.mass);
+    att.knockback(-nh.x * recoil, 3, -nh.z * recoil, 0.12);
+    att.hitAt = vic.hitAt = this.presentStep;
+    const me = this.sim.jellies[0];
+    hitEffects({ att, vic, contact: att.pos.clone().addScaledVector(nh, att.r), nh, K, air: att.airDash }, (a) => this._shake(a, att, vic, me));
+    const p = { att, vic, step: this.presentStep, ok: false, src: att.dashSrc, dashAt: att.dashAt, wuAt: att.wuAt, closing };
+    this.predicted.push(p);
+    // sale volando: si choca a otro, carambola (se predice recién cuando el servidor confirmó este golpe)
+    if (K >= 10) { vic.flyUntil = this.sim.time + 0.9; vic.flyBy = att; vic.flyHit = p; }
+    this.stats.predicted++;
+    if (vic === me) this.stats.meHitPred++;
   }
 
-  _event(e) {
-    const sim = this.sim, type = e[1];
-    switch (type) {
-      case 'f': fx[e[2]]?.(...e.slice(3).map(dec)); break;
-      case 'a': {
-        if (e[3] === this.you && (e[2] === 'jump' || e[2] === 'dash' || e[2] === 'land')) break; // eso ya sonó (lo predijiste vos)
-        let args = e.slice(4).map(dec);
-        // las sierras y los pinchos suenan según qué tan cerca estás
-        if (['sawWarn', 'sawRise', 'spikesWarn', 'spikesUp'].includes(e[2])) args = [1];
-        sfx[e[2]]?.(...args);
-        break;
-      }
-      case 'p+': sim.pickups.addRemote({ id: e[2], x: e[3], y: e[4], z: e[5], vx: e[6], vy: e[7], vz: e[8], power: e[9] }); break;
-      case 'p-': sim.pickups.eatRemote(e[2], this.jelly(e[3])); break;
-      case 'o': sim.oil.spawn(e[2], e[3], this.jelly(e[4]) || null); break;
-      case 's': { const owner = this.jelly(e[3]); if (owner) sim.shots.spawn(e[2], owner, dec(e[4]), dec(e[5])); break; }
-      case 'sl': { const j = this.jelly(e[2]); if (j && !j.dead) this.ui.slice?.(j, dec(e[3]), dec(e[4])); break; }
-      case 'im': { const j = this.jelly(e[2]); if (j) { j.impale(dec(e[3]), dec(e[4]), e[5]); j.impaleN = dec(e[4]); } break; }
-      case 'dn': { const j = this.jelly(e[2]); if (j && !j.dead) j.dent(dec(e[3]), e[4], e[5]); break; }
-      case 'sh': this.ui.shake?.(e[2]); break;
-      case 'clr': sim.pickups.clear(); sim.oil.clear(); sim.shots.clear(); break;
-      case 'tm': this.ui.teamEvent?.(e[2], e[3]); break;
-      default: break;
+  // carambola: el que sale volando por un golpe le pega al que choca (misma regla que el servidor)
+  _chainHit(src, dst, n, closing) {
+    const time = this.sim.time;
+    if (dst === src.flyBy || time < (dst.chainUntil || 0) || !this._enemy(src.flyBy || src, dst)) return;
+    // si el golpe que lo hizo volar todavía no está confirmado, sólo se arriesga una carambola (no una cadena)
+    const m = Online.chainMode;
+    if (!m) return;
+    if (src.flyHit && !src.flyHit.ok && (m === 3 || (m === 1 && src.flyHit.src === 'carambola'))) return;
+    const nh = new THREE.Vector3(n.x, 0, n.z).normalize();
+    const { K } = Sim.hitForce(src.mass, dst.mass, dst.damage, closing, false, false, dst.daze > 0);
+    dst.knockback(nh.x * K, 3 + K * CONFIG.knockLift, nh.z * K, CONFIG.stunBase + K * CONFIG.stunPerForce);
+    dst.chainUntil = time + 0.4;
+    const v = src.body.linvel();
+    src.body.setLinvel({ x: v.x * 0.45, y: v.y, z: v.z * 0.45 }, true);
+    src.flyUntil = 0;
+    src.hitAt = dst.hitAt = this.presentStep;
+    const me = this.sim.jellies[0];
+    hitEffects({ att: src, vic: dst, contact: src.pos.clone().addScaledVector(nh, src.r), nh, K, chain: true }, (a) => this._shake(a, src, dst, me));
+    const p = { att: src, vic: dst, step: this.presentStep, ok: false, src: 'carambola', closing };
+    this.predicted.push(p);
+    if (K >= 10) { dst.flyUntil = time + 0.9; dst.flyBy = src.flyBy || src; dst.flyHit = p; }
+    this.stats.predicted++;
+    if (dst === me) this.stats.meHitPred++;
+  }
+
+  // el temblor de cámara es fuerte si el golpe es tuyo; si es de otros, según qué tan cerca está
+  _shake(a, att, vic, me) {
+    if (att === me || vic === me) { this.ui.shake?.(a); return; }
+    if (me.dead) return;
+    const d = Math.min(me.pos.distanceTo(att.pos), me.pos.distanceTo(vic.pos));
+    if (d < 25) this.ui.shake?.(a * (1 - d / 25) * 0.6);
+  }
+
+  _serverHit(step, e) {
+    const att = this.jelly(e[2]), vic = this.jelly(e[3]);
+    if (!att || !vic) return;
+    this.stats.serverHits++;
+    const me = this.sim.jellies[0];
+    if (vic === me) { this.stats.meHitServer++; this._meHitLocal = this.stepSeq - (this.presentStep - step); }
+    // ¿ya lo mostraste (lo predijiste al verlos tocarse)? Entonces sólo falta lo que no se puede adivinar (el mareo)
+    const p = this.predicted.find((x) => !x.ok && x.att === att && x.vic === vic && Math.abs(x.step - step) < 45);
+    if (p) { p.ok = true; this.stats.confirmed++; if (e[8]) sfx.dizzy(); return; }
+    this.stats.unpredicted++;
+    if (vic === me) this.stats.meHitUnpred++;
+    if (e[6] >= 10) { vic.flyUntil = step * STEP + 0.9; vic.flyBy = e[9] ? att.flyBy || att : att; vic.flyHit = null; }
+    const nh = dec(e[5]);
+    hitEffects({ att, vic, contact: dec(e[4]), nh, K: e[6], air: !!e[7], dazed: !!e[8], chain: !!e[9] }, (a) => this._shake(a, att, vic, me));
+  }
+
+  // las predicciones que el servidor nunca confirmó se olvidan (las corrige la próxima foto)
+  _checkPredicted() {
+    const limit = this.presentStep - 240;
+    this.predicted = this.predicted.filter((p) => !p.ok && p.step > limit);
+  }
+
+  // ---------------------------------------------------------------- cada paso de física (1/120 s)
+  step(pc, doSkin) {
+    const sim = this.sim, js = sim.jellies, me = js[0];
+    this.stepSeq++;
+    this.presentStep++;
+    sim.time = this.presentStep * STEP;
+    // equipos: quietos hasta el ¡YA! (y la cuenta 3-2-1, exacta en tu presente)
+    const frozen = this.goStep > this.presentStep;
+    if (this.goStep && this._firedGo !== this.goStep) {
+      const left = (this.goStep - this.presentStep) * STEP;
+      const n = left > 0 ? Math.ceil(left - 1e-6) : 0;
+      if (n !== this._lastCount && n <= 3) { this._lastCount = n; this.ui.teamEvent?.('count', { n }); if (n === 0) this._firedGo = this.goStep; }
     }
+    // la tecla de este paso (numerada): el servidor la aplica en este mismo orden
+    const flags = (pc.jumpHeld ? 1 : 0) | (pc.sprint ? 2 : 0) | (pc.jump ? 4 : 0) | (pc.dash ? 8 : 0) | (pc.throw === 'oil' ? 16 : pc.throw === 'spit' ? 32 : 0);
+    this.out.push([this.stepSeq, +pc.mx.toFixed(3), +pc.mz.toFixed(3), frozen ? 0 : flags]);
+
+    sim.arena.preStep(STEP, sim.time);
+    // todos con la misma física: vos con tus teclas, los bots con su plan, las otras personas con su última dirección
+    const P = this.presentStep;
+    for (let i = 0; i < js.length; i++) {
+      const j = js[i];
+      if (j.dead || j.benched || j.impaled) continue;
+      if (i === 0) { j.control(STEP, frozen ? STILL : pc); j.throwCd = Math.max(0, j.throwCd - STEP); continue; }
+      const cmd = frozen ? STILL : this._planCmd(j) || j.netCmd || STILL;
+      const wu = j.windup > 0, da = j.dashTimer > 0;
+      j.control(STEP, cmd);
+      if (!wu && j.windup > 0) { j.wuAt = P; j.dashSrc = 'plan'; }
+      if (!da && j.dashTimer > 0) j.dashAt = P;
+      j.throwCd = Math.max(0, j.throwCd - STEP);
+    }
+    sim.world.step();
+    for (const j of js) if (!j.dead && !j.benched) j.postStep(STEP);
+    this._localHits();
+    this._record();
+    for (const j of js) if (j.visOff) j.visOff.multiplyScalar(j.visOff.lengthSq() > 1 ? 0.94 : 0.88); // lo que se ve alcanza a la física
+    const alive = js.filter((j) => !j.dead && !j.benched && !j.impaled);
+    sim.oil.step(STEP, alive, sim.time); // patinar en el aceite también se predice
+    sim.pickups.step(STEP, sim.arena, me.dead ? [] : [me], () => {}); // tu blob se las "come" al pasar (el servidor confirma)
+    sim.shots.step(STEP, js, NOOP_SHOTS);
+    for (const j of js) j.justSlipped = false;
+    if (doSkin) for (const j of js) j.skin(STEP);
+  }
+
+  // una vez por frame: mandar las teclas de los pasos de este frame
+  sendInput() {
+    if (!this.active || !this.out?.length) return;
+    this._send({ t: 'in', l: this.out, n: this.lead });
+    this.out = [];
   }
 
   // ms gastados leyendo fotos desde la última vez (registro de rendimiento, cada 10 s)

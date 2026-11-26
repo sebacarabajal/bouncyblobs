@@ -48,9 +48,28 @@ const SPARE_NAMES = ['Limón', 'Celeste', 'Uva', 'Lima', 'Mandarina', 'Arándano
 
 const _n = new THREE.Vector3();
 const _p = new THREE.Vector3();
+const _hitWhite = new THREE.Color('#ffffff'), _hitCream = new THREE.Color('#fff2c0');
+
+// Lo que se ve, se oye y se siente de un golpe (chispas, aro, destello, abolladuras, sonido, temblor).
+// En el servidor NO se manda pedazo por pedazo: se manda UN evento 'hit' y cada navegador llama a esto
+// (o ya lo llamó antes, si predijo el golpe al ver a los dos tocarse).
+export function hitEffects({ att, vic, contact, nh, K, air = false, dazed = false, chain = false }, shake) {
+  const back = _n.copy(nh).negate();
+  fx.burst(contact, vic.color, (chain ? 8 : 10) + (K | 0), K * (chain ? 0.4 : 0.45), nh, chain ? 0.1 : 0.11);
+  if (!chain) fx.burst(contact, att.color, 5, K * 0.3, back, 0.08);
+  fx.ring(contact, nh, air ? _hitWhite : _hitCream, (1.5 + K * 0.08) * (air ? 1.5 : 1));
+  fx.impact(contact.clone().setY(contact.y + 0.3), K * (air ? 1.25 : 1));
+  if (!vic.dead) { vic.dent(back, K * (chain ? 1.2 : 1.3), 0.2); vic.squashVel -= 3; }
+  if (!att.dead) att.dent(nh, K * 0.6, 0.3);
+  if (dazed) sfx.dizzy();
+  shake?.(CONFIG.shake * Math.min(chain ? 1.5 : 1.8, K / 15));
+  sfx.hit(K);
+}
 const _hn = new THREE.Vector3();
 const STILL = { mx: 0, mz: 0, jump: false, jumpHeld: false, dash: false, sprint: false, throw: null };
 const BOT_EVERY = 4; // los bots deciden 30 veces por segundo (no 120)
+const q127 = (v) => Math.round(Math.max(-1, Math.min(1, v)) * 127) / 127; // (así viaja en la foto: igual en los dos lados)
+const lim3 = (v) => (v > 3 ? 3 : v < -3 ? -3 : v);
 
 export class Sim {
   // local = true: hay una gelatina "tuya" (jellies[0], isPlayer) que maneja el teclado
@@ -61,6 +80,9 @@ export class Sim {
     this.world.timestep = STEP;
     this.time = 0;
     this.stepN = 0;
+    // anticipación de los bots (en pasos). 0 = deciden y hacen en el mismo paso (jugando solo). En las salas en
+    // línea el servidor la sube (ver botPlanned): los navegadores reciben cada decisión antes de que se ejecute.
+    this.botLead = 0;
     this.mode = 'ffa';
     this.arena = null;
     this.arenaName = null;
@@ -375,27 +397,22 @@ export class Sim {
     att.dashTimer = 0;
     const recoil = 4 / Math.sqrt(att.mass);
     att.knockback(-nh.x * recoil, 3, -nh.z * recoil, 0.12);
-    vic.dent(back, K * 1.3, 0.2);
-    att.dent(nh, K * 0.6, 0.3);
-    this.hooks.dent?.(vic, back, K * 1.3, 0.2);
-    this.hooks.dent?.(att, nh, K * 0.6, 0.3);
-    vic.squashVel -= 3;
-
     this.hooks.event?.('golpe');
     const contact = att.pos.clone().addScaledVector(nh, att.r);
-    fx.burst(contact, vic.color, 10 + (K | 0), K * 0.45, nh, 0.11);
-    fx.burst(contact, att.color, 5, K * 0.3, back, 0.08);
-    fx.ring(contact, nh, new THREE.Color(air > 1 ? '#ffffff' : '#fff2c0'), (1.5 + K * 0.08) * (air > 1 ? 1.5 : 1));
-    fx.impact(contact.clone().setY(contact.y + 0.3), K * (air > 1 ? 1.25 : 1));
-
     // golpe fuerte → muchas chances de dejarlo mareado
+    let dazed = false;
     if (K >= CONFIG.dazeForce && vic.daze <= 0) {
       const over = (K - CONFIG.dazeForce) / 15;
       if (Math.random() < Math.min(0.9, 0.5 + over * 0.5)) {
         vic.dizzy(CONFIG.dazeMin + (CONFIG.dazeMax - CONFIG.dazeMin) * Math.min(1, over));
-        sfx.dizzy();
+        dazed = true;
       }
     }
+    const hit = { att, vic, contact, nh, K, air: air > 1, dazed, chain: false };
+    this.hooks.hitFx?.(hit); // servidor: un evento 'hit' (los efectos los arma cada navegador)
+    this.hooks.mute?.(true);
+    hitEffects(hit, (a) => this.hooks.shake?.(a));
+    this.hooks.mute?.(false);
     // golpe fuerte: le saca masa al rival (blobcitos que salen volando)
     const lose = Math.min(3, Math.floor(K / 14));
     for (let i = 0; i < lose && vic.mass - CONFIG.pickupMass >= 1; i++) {
@@ -403,8 +420,6 @@ export class Sim {
       const a = Math.random() * Math.PI * 2;
       this.pickups.eject(vic.pos.clone().setY(vic.pos.y + vic.r), new THREE.Vector3(nh.x * 6 + Math.cos(a) * 3, 8 + Math.random() * 4, nh.z * 6 + Math.sin(a) * 3), vic);
     }
-    this.hooks.shake?.(CONFIG.shake * Math.min(1.8, K / 15));
-    sfx.hit(K);
     this.hooks.hit?.(att, vic);
   }
 
@@ -423,15 +438,11 @@ export class Sim {
     const v = src.body.linvel();
     src.body.setLinvel({ x: v.x * 0.45, y: v.y, z: v.z * 0.45 }, true);
     src.flyUntil = 0;
-    dst.dent(nh.clone().negate(), K * 1.2, 0.2);
-    src.dent(nh, K * 0.6, 0.3);
-    this.hooks.dent?.(dst, nh.clone().negate(), K * 1.2, 0.2);
-    const contact = src.pos.clone().addScaledVector(nh, src.r);
-    fx.burst(contact, dst.color, 8 + (K | 0), K * 0.4, nh, 0.1);
-    fx.ring(contact, nh, new THREE.Color('#fff2c0'), 1.5 + K * 0.08);
-    fx.impact(contact.clone().setY(contact.y + 0.3), K);
-    this.hooks.shake?.(CONFIG.shake * Math.min(1.5, K / 15));
-    sfx.hit(K);
+    const hit = { att: src, vic: dst, contact: src.pos.clone().addScaledVector(nh, src.r), nh, K, air: false, dazed: false, chain: true };
+    this.hooks.hitFx?.(hit);
+    this.hooks.mute?.(true);
+    hitEffects(hit, (a) => this.hooks.shake?.(a));
+    this.hooks.mute?.(false);
   }
 
   checkHits() {
@@ -451,7 +462,7 @@ export class Sim {
           const rel = a.vBefore.dot(n) - b.vBefore.dot(n);
           if (rel > 7 && time < (a.flyUntil || 0)) this.chainHit(a, b, n, rel);
           else if (rel > 7 && time < (b.flyUntil || 0)) this.chainHit(b, a, n.clone().negate(), rel);
-          else if (rel > 7) sfx.bump(rel);
+          else if (rel > 7) { this.hooks.mute?.(true); sfx.bump(rel); this.hooks.mute?.(false); }
           // empujón (sin embestir): el que se mete contra el otro queda anotado como "quien lo empujó"
           const va = a.vBefore.dot(n), vb = -b.vBefore.dot(n);
           if (va > 1.5 && va > vb) { if (this.isEnemy(a, b)) { b.pushBy = a; b.pushTime = time; } }
@@ -483,13 +494,40 @@ export class Sim {
     return c;
   }
 
-  botThink(b, dt) {
+  // EN LÍNEA: el bot decide AHORA lo que va a hacer dentro de botLead pasos (mirando dónde van a estar todos para
+  // entonces). La decisión viaja en la foto y llega a cada navegador ANTES de que se ejecute: así cada navegador
+  // mueve a los bots igual que el servidor, con sus embestidas y saltos en el mismo paso exacto, en vez de
+  // adivinarlos tarde (eso eran los golpes "que llegaban de la nada" y los saltos de lugar de los bots).
+  // j.plan: [{ at (paso del servidor en que se hace), mx, mz, jumpHeld, sprint, jump, dash, throw }…]
+  botPlanned(j, i) {
+    if (j.dead) { j.plan = null; return STILL; }
+    const plan = (j.plan ||= []);
+    if (!j.ai || (this.stepN + i) % BOT_EVERY === 0) {
+      const L = this.botLead;
+      const d = this.botThink(j, STEP * BOT_EVERY, L * STEP);
+      const at = this.stepN + L;
+      while (plan.length && plan[plan.length - 1].at >= at) plan.pop(); // (bajó la anticipación: lo nuevo manda)
+      plan.push({ at, mx: q127(d.mx), mz: q127(d.mz), jumpHeld: d.jumpHeld, sprint: d.sprint, jump: d.jump, dash: d.dash, throw: d.throw });
+    }
+    while (plan.length > 1 && plan[1].at <= this.stepN) plan.shift();
+    const e = plan.length && plan[0].at <= this.stepN ? plan[0] : null;
+    const c = (j.planCmd ||= { ...STILL });
+    const now = !!e && e.at === this.stepN;
+    c.mx = e ? e.mx : 0; c.mz = e ? e.mz : 0;
+    c.jumpHeld = !!e && e.jumpHeld; c.sprint = !!e && e.sprint;
+    c.jump = now && e.jump; c.dash = now && e.dash; c.throw = now ? e.throw : null;
+    return c;
+  }
+
+  // T: segundos a futuro en que se va a ejecutar lo que se decide (las posiciones se proyectan con la velocidad)
+  botThink(b, dt, T = 0) {
     const arena = this.arena, jellies = this.jellies;
     const ai = (b.ai ||= { t: 0, wx: 0, wz: 0, dashWait: 1 + Math.random() * 2, hold: 0, pounce: 0, cmd: { mx: 0, mz: 0, jump: false, jumpHeld: false, dash: false, sprint: false } });
     const cmd = ai.cmd;
     cmd.jump = false; cmd.dash = false; cmd.sprint = false; cmd.throw = null;
     ai.dashWait -= dt; ai.t -= dt; ai.hold -= dt;
-    const px = b.pos.x, pz = b.pos.z;
+    const bv = T ? b.body.linvel() : null;
+    const px = T ? b.pos.x + lim3(bv.x * T) : b.pos.x, pz = T ? b.pos.z + lim3(bv.z * T) : b.pos.z;
     let mx = 0, mz = 0;
 
     let food = null, fd = Infinity; // blobcito más cercano
@@ -498,19 +536,21 @@ export class Sim {
       const d = Math.hypot(p.mesh.position.x - px, p.mesh.position.z - pz);
       if (d < fd) { fd = d; food = p; }
     }
-    let tgt = null, td = Infinity; // rival más cercano (a los humanos los buscan un poco más)
+    let tgt = null, td = Infinity, tx = 0, tz = 0; // rival más cercano (a los humanos los buscan un poco más)
     const aggr = CONFIG.botsAggressive || this.teams.active;
     for (const o of jellies) {
       if (o === b || o.dead || !this.isEnemy(b, o)) continue;
-      const d = Math.hypot(o.pos.x - px, o.pos.z - pz) * (o.isPlayer || o.human ? 0.7 : 1);
-      if (d < td) { td = d; tgt = o; }
+      let ox = o.pos.x, oz = o.pos.z;
+      if (T) { const v = o.body.linvel(); ox += lim3(v.x * T); oz += lim3(v.z * T); }
+      const d = Math.hypot(ox - px, oz - pz) * (o.isPlayer || o.human ? 0.7 : 1);
+      if (d < td) { td = d; tgt = o; tx = ox; tz = oz; }
     }
     // trampa: si el rival está sobre un pozo y tengo el botón cerca, voy a embestirlo
     let trap = null;
     if (aggr && tgt && arena.traps) {
       for (const tr of arena.traps) {
         if (!tr.ready()) continue;
-        if (Math.hypot(tgt.pos.x - tr.x, tgt.pos.z - tr.z) < tr.r + 1.5 && Math.hypot(tr.button.x - px, tr.button.z - pz) < 16) { trap = tr; break; }
+        if (Math.hypot(tx - tr.x, tz - tr.z) < tr.r + 1.5 && Math.hypot(tr.button.x - px, tr.button.z - pz) < 16) { trap = tr; break; }
       }
     }
     const goFood = !trap && food && (!aggr ? fd < 18 : fd < Math.min(8, td * 0.5));
@@ -533,7 +573,7 @@ export class Sim {
       const dx = ai.wx - px, dz = ai.wz - pz, d = Math.hypot(dx, dz);
       if (d > 0.8) { mx = (dx / d) * 0.4; mz = (dz / d) * 0.4; }
     } else {
-      const dx = tgt.pos.x - px, dz = tgt.pos.z - pz, d = Math.hypot(dx, dz) || 1;
+      const dx = tx - px, dz = tz - pz, d = Math.hypot(dx, dz) || 1;
       mx = dx / d; mz = dz / d;
       if (d > 12 && b.energy > 60) cmd.sprint = true;
       const f = b.facing;
@@ -545,7 +585,7 @@ export class Sim {
     }
     // chorro: a los que tiene adelante y lejos
     if (b.ammo.spit > 0 && tgt && b.throwCd <= 0 && aggr) {
-      const dx = tgt.pos.x - px, dz = tgt.pos.z - pz, d = Math.hypot(dx, dz) || 1;
+      const dx = tx - px, dz = tz - pz, d = Math.hypot(dx, dz) || 1;
       const face = (b.facing.x * dx + b.facing.z * dz) / d;
       if (d > 7 && d < CONFIG.spitRange * 0.8 && face > 0.9 && Math.random() < dt * 1.5) cmd.throw = 'spit';
     }
@@ -553,7 +593,7 @@ export class Sim {
     if (b.ammo.oil > 0 && b.throwCd <= 0 && !cmd.throw) {
       for (const o of jellies) {
         if (o === b || o.dead || !this.isEnemy(b, o)) continue;
-        const dx = o.pos.x - px, dz = o.pos.z - pz, d = Math.hypot(dx, dz) || 1;
+        const dx = o.pos.x - b.pos.x, dz = o.pos.z - b.pos.z, d = Math.hypot(dx, dz) || 1;
         if (d < 3 || d > 14) continue;
         const behind = (b.facing.x * dx + b.facing.z * dz) / d < -0.6;
         const v = o.body.linvel();
@@ -570,13 +610,13 @@ export class Sim {
     let stack = null;
     for (const o of jellies) {
       if (o === b || o.dead) continue;
-      const h = Math.hypot(o.pos.x - px, o.pos.z - pz);
+      const h = Math.hypot(o.pos.x - b.pos.x, o.pos.z - b.pos.z);
       if (h < (b.r + o.r) * 0.75 && Math.abs(b.pos.y - o.pos.y) > Math.min(b.r, o.r) * 0.6) { stack = o; break; }
     }
     const v = b.body.linvel(), sp = Math.hypot(v.x, v.z);
     ai.stuck = Math.hypot(mx, mz) > 0.3 && sp < 0.6 ? (ai.stuck || 0) + dt : Math.max(0, (ai.stuck || 0) - dt * 2);
     if ((stack || ai.stuck > 1) && !(ai.escapeT > 0)) {
-      let ex = stack ? px - stack.pos.x : 0, ez = stack ? pz - stack.pos.z : 0;
+      let ex = stack ? b.pos.x - stack.pos.x : 0, ez = stack ? b.pos.z - stack.pos.z : 0;
       const el = Math.hypot(ex, ez);
       if (el < 0.2) { const a = Math.random() * Math.PI * 2; ex = Math.cos(a); ez = Math.sin(a); } else { ex /= el; ez /= el; }
       ai.ex = ex; ai.ez = ez; ai.escapeT = 0.8; ai.stuck = 0;
@@ -663,9 +703,12 @@ export class Sim {
     for (let i = 0; i < jellies.length; i++) {
       const j = jellies[i];
       if (j.benched || j.away) continue;
-      let cmd;
-      if (frozen) cmd = STILL; // equipos: quietos hasta el ¡YA!
-      else cmd = cmdFor(j) || (j.dummy ? this.dummyThink(j) : this.botCmd(j, i));
+      // la tecla de un humano se consume SIEMPRE, aunque esté quieto (¡YA!) o muerto: si no, se le juntan en la
+      // cola del servidor y todo lo que hace después llega con atraso
+      let cmd = cmdFor(j);
+      if (frozen) { cmd = STILL; j.plan = null; } // equipos: quietos hasta el ¡YA!
+      else if (!cmd) cmd = j.dummy ? this.dummyThink(j) : this.botLead > 0 ? this.botPlanned(j, i) : this.botCmd(j, i);
+      j.lastCmd = cmd; // (se manda a los navegadores: así predicen hacia dónde va cada uno)
       H.who?.(j);
       j.control(STEP, cmd);
       j.throwCd = Math.max(0, j.throwCd - STEP);
@@ -725,7 +768,7 @@ export class Sim {
       sfx.pop();
       j.kill();
     }
-    j.human = true; j.ai = null; j.away = false;
+    j.human = true; j.ai = null; j.plan = null; j.away = false;
     this.applyLook(j, look);
     j.kos = 0; j.falls = 0; j.score = 0; j.maxMass = 1;
     if (this.teams.active) this.teams.join(j);

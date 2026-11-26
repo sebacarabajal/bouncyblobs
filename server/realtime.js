@@ -14,6 +14,7 @@ export function createRealtime({ env }) {
   worker.on('message', (m) => {
     if (m.type === 'send') { for (const cid of m.cids) { const ws = socks.get(cid); if (ws?.readyState === 1) ws.send(m.data); } }
     else if (m.type === 'sendEach') { for (const [cid, data] of m.list) { const ws = socks.get(cid); if (ws?.readyState === 1) ws.send(data); } }
+    else if (m.type === 'bin') { for (const [cid, buf] of m.list) { const ws = socks.get(cid); if (ws?.readyState === 1) ws.send(buf, { binary: true, compress: false }); } }
     else if (m.type === 'rooms') rooms = m.rooms;
   });
   worker.on('error', (e) => console.error('[salas] el hilo de las salas se cayó:', e));

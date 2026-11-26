@@ -27,6 +27,7 @@ function fakeEl(tag) {
 }
 
 const g = globalThis;
+g.__HEADLESS__ = true; // (las arenas no juntan mallas para dibujar: ver arenas/common.js freeze)
 if (!g.document) {
   g.document = {
     createElement: fakeEl,

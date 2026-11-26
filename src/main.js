@@ -479,6 +479,7 @@ async function main() {
   fe.add(CONFIG, 'sprintEnergy', 0, 100, 1).name('energía/s corriendo');
   fe.add(CONFIG, 'energyRegen', 0, 100, 1).name('recarga/s');
   fe.add(CONFIG, 'dashSpeed', 8, 40).name('velocidad embestida'); fe.add(CONFIG, 'dashTime', 0.05, 0.5).name('duración embestida');
+  fe.add(CONFIG, 'dashWindup', 0, 0.3, 0.01).name('carga antes de embestir (s)');
   fe.add(CONFIG, 'dashCooldown', 0, 4).name('espera entre embestidas');
   const fm = gui.addFolder('🏃 Movimiento');
   fm.add(CONFIG, 'moveSpeed', 3, 20).name('velocidad'); fm.add(CONFIG, 'groundAccel', 10, 150).name('agarre en piso'); fm.add(CONFIG, 'airAccel', 0, 80).name('control en el aire');
@@ -729,7 +730,7 @@ async function main() {
   openLobby();
 
   perf.ctxFn = () => ({
-    arena: arenaName, online: online.active ? { room: online.room?.id, rtt: Math.round(online.rtt * 1000), snapMs: online.takeNetMs(), events: online.events.length, pickups: pickups.list.length } : null, fpsCap: CONFIG.fpsCap, monitorHz: adaptive.hz, fpsTarget: Math.round(adaptive.target * 10) / 10, resScale: adaptive.resScale, bloom: CONFIG.bloom, inLobby, tutorial: tutorial.active, quality: Q.level, qualityAuto: Q.auto, touch: !!touchUI,
+    arena: arenaName, online: online.active ? { room: online.room?.id, rtt: Math.round(online.rtt * 1000), snapMs: online.takeNetMs(), queue: online.stats.queue, scale: +online.timeScale.toFixed(3), corr: online.stats.corrN ? +(online.stats.corr / online.stats.corrN).toFixed(2) : 0, hitsPred: online.stats.predicted, hitsConfirmed: online.stats.confirmed, hitsUnpred: online.stats.unpredicted, pickups: pickups.list.length } : null, fpsCap: CONFIG.fpsCap, monitorHz: adaptive.hz, fpsTarget: Math.round(adaptive.target * 10) / 10, resScale: adaptive.resScale, bloom: CONFIG.bloom, inLobby, tutorial: tutorial.active, quality: Q.level, qualityAuto: Q.auto, touch: !!touchUI,
     jellies: jellies.filter((j) => !j.dead).length, onScreen: jellies.filter((j) => !j.dead && !j.offscreen).length,
     pickups: pickups.list.length, oilSlicks: oil.list.length, slices: slices.list.length, shots: shots.list.length,
   });
@@ -760,7 +761,7 @@ async function main() {
     if (warming) { acc = 0; return; } // compilando materiales tapado por la pantalla de carga
 
     // sin congelamientos: la simulación nunca se pausa (pensado para multiplayer)
-    acc += dt;
+    acc += dt * (online.active ? online.timeScale : 1); // en línea: ritmo apenas ajustado (ver online.js timeScale)
     // después de un trabón se hacen varios pasos seguidos para alcanzar: la piel (sólo visual) se
     // simula en los 2 primeros nada más, así un trabón no arrastra a los siguientes frames
     for (let k = 0; acc >= STEP; k++) { fixedStep(k < 2); acc -= STEP; perf.t.steps++; }

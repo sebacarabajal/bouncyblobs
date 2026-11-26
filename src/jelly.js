@@ -342,7 +342,7 @@ export class Jelly {
     if (this.daze > 0) {
       this.daze = Math.max(0, this.daze - dt);
       this.dazeT += dt;
-      const a = this.dazeT * 1.6 + this.dazePhase;
+      const a = this.dazeT * 1.6 + (((this.netId ?? this.id) || 0) * 2.399) % 6.283; // (igual en el servidor y en el navegador)
       cmd = { mx: Math.sin(a) * 0.3, mz: Math.cos(a * 1.37) * 0.3, jump: false, jumpHeld: false, dash: false, sprint: false };
       this.jumpBuffer = 0;
     }
@@ -364,20 +364,37 @@ export class Jelly {
 
     if (ml > 0.15 && !stunned && !this.dashing) this.targetYaw = Math.atan2(mx, mz);
 
-    // Embestida
+    // Embestida: primero un instante de CARGA (dashWindup: se encoge, frena y mira hacia donde va a salir) y
+    // después sale disparado. La carga hace que la embestida se vea venir, también por la red: llega a todos los
+    // jugadores antes del golpe (sin carga, una embestida dura menos que lo que tarda en llegar la noticia).
     const dashCost = CONFIG.dashEnergy;
     if (!this.sprinting) this.energy = Math.min(100, this.energy + CONFIG.energyRegen * dt);
-    if (cmd.dash && this.dashCd <= 0 && !stunned && this.energy >= dashCost) {
+    let launch = false;
+    if (cmd.dash && this.dashCd <= 0 && !stunned && this.energy >= dashCost && !(this.windup > 0)) {
       this.energy -= dashCost;
       if (ml > 0.15) this.dashDir.set(mx / ml, 0, mz / ml);
       else this.dashDir.copy(this.facing);
       this.yaw = this.targetYaw = Math.atan2(this.dashDir.x, this.dashDir.z);
-      this.dashTimer = CONFIG.dashTime;
       this.dashCd = CONFIG.dashCooldown;
+      if (CONFIG.dashWindup > 0) { this.windup = CONFIG.dashWindup; this.squashVel -= 5; } // se encoge: carga
+      else launch = true;
+    }
+    if (this.windup > 0) {
+      if (stunned) this.windup = 0; // si le pegan mientras carga, pierde la embestida
+      else {
+        this.windup -= dt;
+        speed *= 0.4; // mientras carga, casi quieto
+        this.yaw = this.targetYaw = Math.atan2(this.dashDir.x, this.dashDir.z);
+        if (this.windup <= 0) { this.windup = 0; launch = true; }
+      }
+    }
+    if (launch) {
+      this.dashTimer = CONFIG.dashTime;
       this.airDash = !this.grounded && this.coyote <= 0;
       // en el aire: se tira en picada (más fuerte)
       vy = this.airDash ? Math.min(vy, 0) - 5 : Math.max(vy, 2.5);
       this.stretchVel += 8;
+      this.lastLaunch = globalThis.performance?.now?.() ?? 0;
       sfx.dash();
       this.onAction?.(this.airDash ? 'dive' : 'dash'); // el tutorial escucha esto
     }
@@ -427,6 +444,7 @@ export class Jelly {
       this.coyote = 0;
       this.grounded = false;
       this.squashVel += 6;
+      this.lastJump = globalThis.performance?.now?.() ?? 0;
       sfx.jump();
       this.onAction?.('jump');
     }
@@ -1022,7 +1040,7 @@ export class Jelly {
 
     // Expresiones
     const hurt = this.stunned || dazed || this.impaledT > 0;
-    const angry = this.dashing || this.dashCd > CONFIG.dashCooldown - 0.35;
+    const angry = this.dashing || this.windup > 0 || this.dashCd > CONFIG.dashCooldown - 0.35;
     for (const e of this.eyes) {
       const { pupil, brow, side, hl, spiral } = e.userData;
       spiral.visible = dazed;
@@ -1070,7 +1088,7 @@ export class Jelly {
     this.vPrev.set(0, 0, 0);
     this.off.fill(0); this.vel.fill(0);
     this.squash = 1; this.squashVel = 0; this.stretch = 1; this.stretchVel = 0;
-    this.damage = 0; this.stun = 0; this.dashTimer = 0; this.dashCd = 0; this.daze = 0; this.impaledT = 0;
+    this.damage = 0; this.stun = 0; this.dashTimer = 0; this.dashCd = 0; this.daze = 0; this.impaledT = 0; this.windup = 0;
     this.mass = 1; this.size = 1; this.colSize = 1;
     this.muscle = 0; this.puff = 0;
     this.collider.setRadius(R);

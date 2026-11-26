@@ -32,6 +32,7 @@ export function createCtx(scene, world) {
     // de video hace por separado (y varias veces por frame: sombras, transparencia de las gelatinas…);
     // una arena con cientos de piezas sueltas (ventanas, barrotes, abrazaderas…) se vuelve cara de dibujar.
     freeze() {
+      if (globalThis.__HEADLESS__) return { before: 0, after: 0 }; // servidor: nadie lo dibuja
       group.updateMatrixWorld(true);
       const skip = (o) => { for (let p = o; p && p !== group; p = p.parent) if (p.userData.dynamic || !p.visible) return true; return false; };
       const buckets = new Map();
