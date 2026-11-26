@@ -172,25 +172,27 @@ const NAMED = `p.name is not null and btrim(p.name) <> all (array['${[...DEFAULT
 
 // ---------------------------------------------------------------- ranking (mejor partida de cada jugador en el período)
 // me: el id del navegador que pregunta (así se marca su fila y se le dice su puesto, sin mostrar ids ajenos)
-async function ranking(pool, mode, period, limit, me) {
+// metric: 'score' (puntos de la partida) o 'mass' (el tamaño más grande que llegó a tener en una partida)
+async function ranking(pool, mode, period, limit, me, metric = 'score') {
   const since = { week: "now() - interval '7 days'", month: "now() - interval '30 days'", all: "'-infinity'::timestamptz" }[period];
+  const val = metric === 'mass' ? 'm.max_mass' : 'm.score';
   const r = await pool.query(`
     with games as (
-      select m.player_id, m.score, m.kos, m.ended_at from matches m join sessions s on s.id = m.session_id join players p on p.id = m.player_id
-      where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and m.score > 0 and not s.is_bot and ${NAMED}
+      select m.player_id, ${val} as value, m.score, m.max_mass, m.kos, m.ended_at from matches m join sessions s on s.id = m.session_id join players p on p.id = m.player_id
+      where m.mode = $1 and m.ended_at is not null and m.ended_at > ${since} and ${val} > ${metric === 'mass' ? 1 : 0} and not s.is_bot and ${NAMED}
     ),
-    best as (select distinct on (player_id) player_id, score, kos, ended_at from games order by player_id, score desc, ended_at),
+    best as (select distinct on (player_id) player_id, value, score, max_mass, kos, ended_at from games order by player_id, value desc, ended_at),
     n as (select player_id, count(*) as games from games group by 1),
-    ranked as (select b.*, n.games, rank() over (order by b.score desc) as rank from best b join n using (player_id))
-    select r.rank, r.player_id = $3 as mine, p.name, upper(substr(md5(r.player_id::text), 1, 4)) as tag, p.country, r.score, r.kos, r.games, r.ended_at as at
+    ranked as (select b.*, n.games, rank() over (order by b.value desc) as rank from best b join n using (player_id))
+    select r.rank, r.player_id = $3 as mine, p.name, upper(substr(md5(r.player_id::text), 1, 4)) as tag, p.country, r.value, r.score, r.max_mass, r.kos, r.games, r.ended_at as at
     from ranked r join players p on p.id = r.player_id
     where r.rank <= $2 or r.player_id = $3 order by r.rank, r.ended_at limit $2 + 1`, [mode, limit, me || null]);
   // sin nombre propio (el que pone el juego: Tú, You, Você…): "anon" + una marca corta y fija por jugador, así no
   // parecen todos la misma persona (la marca sale de un hash del id: no lo revela)
-  const rows = r.rows.map((x) => ({ rank: Number(x.rank), mine: !!x.mine, name: DEFAULT_NAMES.has((x.name || '').trim()) ? null : x.name, anon: DEFAULT_NAMES.has((x.name || '').trim()), tag: x.tag, country: x.country, score: Number(x.score), kos: Number(x.kos) || 0, games: Number(x.games), at: x.at }));
+  const rows = r.rows.map((x) => ({ rank: Number(x.rank), mine: !!x.mine, name: DEFAULT_NAMES.has((x.name || '').trim()) ? null : x.name, anon: DEFAULT_NAMES.has((x.name || '').trim()), tag: x.tag, country: x.country, value: Number(x.value), score: Number(x.score), mass: x.max_mass == null ? null : Math.round(x.max_mass * 10) / 10, kos: Number(x.kos) || 0, games: Number(x.games), at: x.at }));
   const list = rows.filter((x) => x.rank <= limit).slice(0, limit);
   const mine = rows.find((x) => x.mine) || null;
-  return { list, me: mine ? { rank: mine.rank, score: mine.score } : null };
+  return { metric, list, me: mine ? { rank: mine.rank, score: mine.score, mass: mine.mass } : null };
 }
 
 // (versión vieja, la usan las páginas abiertas antes de actualizar)
@@ -272,7 +274,7 @@ export function createApi({ pool, env, realtime = null }) {
         if (sp.get('v') === '2') {
           const period = ['week', 'month', 'all'].includes(sp.get('period')) ? sp.get('period') : 'week';
           const me = UUID.test(sp.get('me') || '') ? sp.get('me') : null;
-          send(res, 200, await ranking(pool, mode, period, int(sp.get('limit'), 1, 100) ?? 10, me), me ? 'private, max-age=20' : 'public, max-age=30');
+          send(res, 200, await ranking(pool, mode, period, int(sp.get('limit'), 1, 100) ?? 10, me, sp.get('metric') === 'mass' ? 'mass' : 'score'), me ? 'private, max-age=20' : 'public, max-age=30');
           return true;
         }
         const period = ['day', 'week', 'all'].includes(sp.get('period')) ? sp.get('period') : 'week';

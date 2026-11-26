@@ -127,9 +127,9 @@ export const telemetry = new Telemetry();
 
 // ranking (mejor partida de cada uno): { list: [{ rank, mine, name, country, score, kos, games, at }], me: { rank, score } }
 // period: 'week' | 'month' | 'all'. Va el id de este navegador para marcar su fila (el servidor no muestra ids).
-export async function fetchRanking({ mode = 'ffa', period = 'week', limit = 10 } = {}) {
+export async function fetchRanking({ mode = 'ffa', period = 'week', limit = 10, metric = 'score' } = {}) {
   try {
-    const r = await fetch(`/api/records?v=2&mode=${mode}&period=${period}&limit=${limit}&me=${encodeURIComponent(pid)}`);
+    const r = await fetch(`/api/records?v=2&mode=${mode}&period=${period}&limit=${limit}&metric=${metric}&me=${encodeURIComponent(pid)}`);
     return r.ok ? await r.json() : { list: [], me: null };
   } catch { return { list: [], me: null }; }
 }

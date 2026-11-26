@@ -370,6 +370,16 @@
       .op-vol { display: flex; align-items: center; gap: 12px; }
       .op-vol input { flex: 1; accent-color: var(--gold); height: 22px; cursor: pointer; }
       .op-vol b { min-width: 52px; text-align: right; font: 400 18px/1 'Lilita One', system-ui, sans-serif; color: var(--cream); }
+      /* embestida lista: burbujita arriba de tu blob (main.js) */
+      #dash-tag { position: fixed; left: 0; top: 0; z-index: 7; pointer-events: none; opacity: 0; transition: opacity 0.1s; will-change: transform; }
+      #dash-tag.show { opacity: 1; }
+      #dash-tag .b { display: flex; align-items: center; gap: 4px; padding: 2px 6px 2px 4px; border-radius: 14px; background: var(--gold); border: 3px solid var(--ink); box-shadow: 0 3px 0 var(--ink); }
+      #dash-tag.show .b { animation: dt-pop 0.28s cubic-bezier(0.3, 1.6, 0.5, 1); }
+      #dash-tag i { font-style: normal; font-size: 16px; line-height: 1; }
+      #dash-tag kbd { font: 900 12px/1 'Nunito', system-ui, sans-serif; color: var(--ink); background: var(--cream); border: 2px solid var(--ink); border-radius: 6px; padding: 2px 5px; }
+      #dash-tag kbd[hidden] { display: none; }
+      @keyframes dt-pop { from { transform: scale(0.4); } }
+      body.in-lobby #dash-tag { display: none; }
       .op-mrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 8px; }
       .op-mnow { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #cbb9ea; font-size: 13px; }
       .op-mnext { flex: none; padding: 5px 11px; border-radius: 12px; border: 3px solid var(--ink); background: var(--panel2); color: var(--cream); font: 800 13px/1.1 'Nunito', system-ui, sans-serif; cursor: pointer; box-shadow: 0 3px 0 var(--ink); }
@@ -425,7 +435,11 @@
       body:not(.is-admin) .op-dev { display: none; } /* atajos de prueba: sólo en la página del admin */
       /* los mejores de la semana (y el botón al ranking completo) */
       .lb-recs { margin: 12px 0 0; padding: 10px 14px 10px; border-radius: 14px; background: rgba(255,255,255,0.05); border: 2px dashed rgba(255,255,255,0.12); }
-      .lb-recs > b { display: block; font: 400 16px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--gold); margin-bottom: 6px; }
+      .lb-rhead { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+      .lb-rhead > b { font: 400 16px/1 'Lilita One', system-ui, sans-serif; letter-spacing: 0.5px; color: var(--gold); }
+      .lb-rx { display: inline-flex; gap: 4px; }
+      .lb-panel .lb-rx button { padding: 3px 8px; border-width: 2px; border-radius: 10px; font-size: 11.5px; box-shadow: 0 2px 0 var(--ink); }
+      .lb-panel .lb-rx button.on { background: var(--gold); color: var(--ink); }
       .lb-recs ol { margin: 0; padding: 0; list-style: none; font: 800 13px/1.75 'Nunito', system-ui, sans-serif; color: #e9defa; }
       .lb-recs li { display: flex; align-items: baseline; gap: 6px; }
       .lb-recs li i { font-style: normal; width: 22px; text-align: center; color: #a995cc; }

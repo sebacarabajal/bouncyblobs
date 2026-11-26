@@ -13,6 +13,8 @@ const flag = (cc) => (cc && /^[A-Z]{2}$/.test(cc) && cc !== 'XX' && cc !== 'T1' 
 const fmtN = (v) => new Intl.NumberFormat(getLang()).format(Math.round(v || 0));
 // nombre en el ranking: el suyo, o "Blob sin nombre #3F2A" si no se puso uno; y "(tú)" en tu fila
 const rkName = (r) => `${flag(r.country)} ${r.anon ? t('rk.anon', { tag: r.tag }) : r.name}${r.mine ? ` ${t('rk.mine')}` : ''}`;
+// el valor de cada ranking: puntos, o el tamaño máximo (x4,2)
+const rkVal = (r, metric) => (metric === 'mass' ? (r.mass != null ? `x${new Intl.NumberFormat(getLang(), { minimumFractionDigits: 1, maximumFractionDigits: 1 }).format(r.mass)}` : '—') : fmtN(r.score));
 const when = (at) => { try { return new Date(at).toLocaleDateString(getLang(), { day: 'numeric', month: 'short' }); } catch { return ''; } };
 
 // Pantalla de inicio: nombre, forma, color (selector con gotero) y tatuaje dibujado a mano alzada.
@@ -82,7 +84,7 @@ export class Lobby {
         <button class="lb-go" data-i18n="lb.go"></button>
         <button class="lb-tut" data-i18n="tut.btn"></button>
         <p class="lb-foot" data-i18n-html="lb.foot"></p>
-        <div class="lb-recs"><b data-i18n="lb.records"></b><ol></ol><p class="lb-rme"></p><button class="lb-rall" data-i18n="rk.all"></button></div>
+        <div class="lb-recs"><div class="lb-rhead"><b data-i18n="lb.records"></b><span class="lb-rx"><button data-x="score" data-i18n="rk.byPts"></button><button data-x="mass" data-i18n="rk.bySize"></button></span></div><ol></ol><p class="lb-rme"></p><button class="lb-rall" data-i18n="rk.all"></button></div>
       </div>
       <div class="lb-stage"><div class="lb-tag"></div><canvas class="lb-3d"></canvas><div class="lb-tip" data-i18n="lb.tip"></div></div>
       </div>
@@ -109,7 +111,8 @@ export class Lobby {
         <div class="lb-mbox lb-rbox">
           <button class="lb-rclose" data-i18n-title="rk.close">✕</button>
           <h2 data-i18n="rk.title"></h2>
-          <div class="lb-rtabs"><button data-p="week" data-i18n="rk.week"></button><button data-p="month" data-i18n="rk.month"></button><button data-p="all" data-i18n="rk.ever"></button></div>
+          <div class="lb-rtabs"><button data-x="score" data-i18n="rk.byPts"></button><button data-x="mass" data-i18n="rk.bySize"></button></div>
+          <div class="lb-rtabs lb-rsmall"><button data-p="week" data-i18n="rk.week"></button><button data-p="month" data-i18n="rk.month"></button><button data-p="all" data-i18n="rk.ever"></button></div>
           <div class="lb-rtabs lb-rsmall"><button data-m="ffa" data-i18n="rk.ffa"></button><button data-m="teams" data-i18n="rk.teams"></button></div>
           <div class="lb-rlist"></div>
           <p class="lb-rme"></p>
@@ -282,8 +285,12 @@ export class Lobby {
     $('.lb-mback').addEventListener('click', closeModal);
 
     // ranking completo: semana · mes · siempre, en cada modo
-    this.rk = { period: 'week', mode: 'ffa' };
+    this.rk = { period: 'week', mode: 'ffa', metric: 'score' };
+    rank.querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', () => { this.rk.metric = b.dataset.x; this._rankLoad(); }));
+    // la tablita del inicio: puntos o tamaño
+    $('.lb-recs').querySelectorAll('[data-x]').forEach((b) => b.addEventListener('click', () => { this.recMetric = b.dataset.x; this._records(); }));
     $('.lb-rall').addEventListener('click', () => {
+      this.rk.metric = this.recMetric || 'score'; // abre en el que se estaba mirando en la tablita
       this.modalOpen = true;
       rank.classList.add('show');
       this._rankLoad();
@@ -474,37 +481,41 @@ export class Lobby {
   // mode.tutorial = entrar al tutorial en vez de a una partida
   // los 5 mejores de la semana (todos contra todos). Los nombres los escriben los jugadores: siempre como texto.
   async _records() {
-    const box = this.$('.lb-recs'), ol = box.querySelector('ol');
-    const { list, me } = await fetchRanking({ mode: 'ffa', period: 'week', limit: 5 });
+    const box = this.$('.lb-recs'), ol = box.querySelector('ol'), metric = (this.recMetric ||= 'score');
+    box.querySelectorAll('[data-x]').forEach((b) => b.classList.toggle('on', b.dataset.x === metric));
+    const key = (this._recKey = metric);
+    const { list, me } = await fetchRanking({ mode: 'ffa', period: 'week', limit: 5, metric });
+    if (key !== this._recKey) return;
     ol.replaceChildren(...(list.length ? list.map((r) => {
       const li = document.createElement('li');
       li.className = r.mine ? 'mine' : '';
       const k = document.createElement('i'); k.textContent = MEDALS[r.rank - 1] || `${r.rank}.`;
       const n = document.createElement('span'); n.textContent = rkName(r);
-      const p = document.createElement('b'); p.textContent = fmtN(r.score);
+      const p = document.createElement('b'); p.textContent = rkVal(r, metric);
       li.append(k, n, p);
       return li;
     }) : [Object.assign(document.createElement('li'), { className: 'none', textContent: t('rk.empty') })]));
-    this._rkMine = { me, listed: list.some((r) => r.mine) };
+    this._rkMine = { me, listed: list.some((r) => r.mine), metric };
     this._nameHint();
   }
 
   // abajo de la tablita: "ponte un nombre" (sin nombre no se entra al ranking) o tu mejor puesto
   _nameHint() {
-    const nm = (this.name || '').trim(), { me = null, listed = false } = this._rkMine || {};
+    const nm = (this.name || '').trim(), { me = null, listed = false, metric = 'score' } = this._rkMine || {};
     this.$('.lb-recs .lb-rme').textContent = !nm || isDefaultName(nm) ? t('rk.nameHint')
-      : me && !listed ? t('rk.you', { rank: me.rank, score: fmtN(me.score) }) : '';
+      : me && !listed ? t('rk.you', { rank: me.rank, value: rkVal(me, metric) }) : '';
   }
 
   // ranking completo (hasta 50 por tabla)
   async _rankLoad() {
-    const box = this.$('.lb-rank'), { period, mode } = this.rk;
+    const box = this.$('.lb-rank'), { period, mode, metric } = this.rk;
     box.querySelectorAll('[data-p]').forEach((b) => b.classList.toggle('on', b.dataset.p === period));
     box.querySelectorAll('[data-m]').forEach((b) => b.classList.toggle('on', b.dataset.m === mode));
+    box.querySelectorAll('[data-x]').forEach((b) => b.classList.toggle('on', b.dataset.x === metric));
     const host = box.querySelector('.lb-rlist');
     host.classList.add('wait');
-    const key = (this._rkKey = `${period}|${mode}`);
-    const { list, me } = await fetchRanking({ mode, period, limit: 50 });
+    const key = (this._rkKey = `${period}|${mode}|${metric}`);
+    const { list, me } = await fetchRanking({ mode, period, limit: 50, metric });
     if (key !== this._rkKey) return; // ya se pidió otra tabla
     host.classList.remove('wait');
     const cell = (tag, txt, cls) => { const c = document.createElement(tag); c.textContent = txt; if (cls) c.className = cls; return c; };
@@ -512,17 +523,20 @@ export class Lobby {
     else {
       const table = document.createElement('table');
       const head = document.createElement('tr');
-      head.append(cell('th', '#'), cell('th', t('rk.player')), cell('th', t('rk.pts'), 'n'), cell('th', t('rk.kos'), 'n'), cell('th', t('rk.games'), 'n'), cell('th', t('rk.when'), 'n'));
+      // la columna principal es la del ranking elegido; la otra queda al lado como dato de esa partida
+      const mass = metric === 'mass';
+      head.append(cell('th', '#'), cell('th', t('rk.player')), cell('th', t(mass ? 'rk.size' : 'rk.pts'), 'n'), cell('th', t(mass ? 'rk.pts' : 'rk.size'), 'n'),
+        cell('th', t('rk.kos'), 'n'), cell('th', t('rk.games'), 'n'), cell('th', t('rk.when'), 'n'));
       table.append(head, ...list.map((r) => {
         const tr = document.createElement('tr');
         if (r.mine) tr.className = 'mine';
-        tr.append(cell('td', MEDALS[r.rank - 1] || String(r.rank), 'k'), cell('td', rkName(r)), cell('td', fmtN(r.score), 'n b'),
-          cell('td', fmtN(r.kos), 'n'), cell('td', fmtN(r.games), 'n'), cell('td', when(r.at), 'n'));
+        tr.append(cell('td', MEDALS[r.rank - 1] || String(r.rank), 'k'), cell('td', rkName(r)), cell('td', rkVal(r, metric), 'n b'),
+          cell('td', rkVal(r, mass ? 'score' : 'mass'), 'n'), cell('td', fmtN(r.kos), 'n'), cell('td', fmtN(r.games), 'n'), cell('td', when(r.at), 'n'));
         return tr;
       }));
       host.replaceChildren(table);
     }
-    box.querySelector('.lb-rme').textContent = me && !list.some((r) => r.mine) ? t('rk.you', { rank: me.rank, score: fmtN(me.score) }) : '';
+    box.querySelector('.lb-rme').textContent = me && !list.some((r) => r.mine) ? t('rk.you', { rank: me.rank, value: rkVal(me, metric) }) : '';
   }
 
   start(mode = {}) {
