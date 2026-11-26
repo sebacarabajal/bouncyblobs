@@ -11,6 +11,8 @@ const MEDALS = ['🥇', '🥈', '🥉'];
 // bandera del país (código de dos letras → emoji)
 const flag = (cc) => (cc && /^[A-Z]{2}$/.test(cc) && cc !== 'XX' && cc !== 'T1' ? String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65)) : '🏳️');
 const fmtN = (v) => new Intl.NumberFormat(getLang()).format(Math.round(v || 0));
+// nombre en el ranking: el suyo, o "Blob sin nombre #3F2A" si no se puso uno; y "(tú)" en tu fila
+const rkName = (r) => `${flag(r.country)} ${r.anon ? t('rk.anon', { tag: r.tag }) : r.name}${r.mine ? ` ${t('rk.mine')}` : ''}`;
 const when = (at) => { try { return new Date(at).toLocaleDateString(getLang(), { day: 'numeric', month: 'short' }); } catch { return ''; } };
 
 // Pantalla de inicio: nombre, forma, color (selector con gotero) y tatuaje dibujado a mano alzada.
@@ -478,7 +480,7 @@ export class Lobby {
       const li = document.createElement('li');
       li.className = r.mine ? 'mine' : '';
       const k = document.createElement('i'); k.textContent = MEDALS[r.rank - 1] || `${r.rank}.`;
-      const n = document.createElement('span'); n.textContent = `${flag(r.country)} ${r.name}`;
+      const n = document.createElement('span'); n.textContent = rkName(r);
       const p = document.createElement('b'); p.textContent = fmtN(r.score);
       li.append(k, n, p);
       return li;
@@ -506,7 +508,7 @@ export class Lobby {
       table.append(head, ...list.map((r) => {
         const tr = document.createElement('tr');
         if (r.mine) tr.className = 'mine';
-        tr.append(cell('td', MEDALS[r.rank - 1] || String(r.rank), 'k'), cell('td', `${flag(r.country)} ${r.name}`), cell('td', fmtN(r.score), 'n b'),
+        tr.append(cell('td', MEDALS[r.rank - 1] || String(r.rank), 'k'), cell('td', rkName(r)), cell('td', fmtN(r.score), 'n b'),
           cell('td', fmtN(r.kos), 'n'), cell('td', fmtN(r.games), 'n'), cell('td', when(r.at), 'n'));
         return tr;
       }));

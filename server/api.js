@@ -163,6 +163,8 @@ async function ingest(pool, req, body, env = {}) {
   }
 }
 
+const DEFAULT_NAMES = new Set(['', 'Tú', 'You', 'Você', 'Vos', 'Blob', '?']);
+
 // ---------------------------------------------------------------- ranking (mejor partida de cada jugador en el período)
 // me: el id del navegador que pregunta (así se marca su fila y se le dice su puesto, sin mostrar ids ajenos)
 async function ranking(pool, mode, period, limit, me) {
@@ -175,10 +177,12 @@ async function ranking(pool, mode, period, limit, me) {
     best as (select distinct on (player_id) player_id, score, kos, ended_at from games order by player_id, score desc, ended_at),
     n as (select player_id, count(*) as games from games group by 1),
     ranked as (select b.*, n.games, rank() over (order by b.score desc) as rank from best b join n using (player_id))
-    select r.rank, r.player_id = $3 as mine, coalesce(p.name, '?') as name, p.country, r.score, r.kos, r.games, r.ended_at as at
+    select r.rank, r.player_id = $3 as mine, p.name, upper(substr(md5(r.player_id::text), 1, 4)) as tag, p.country, r.score, r.kos, r.games, r.ended_at as at
     from ranked r join players p on p.id = r.player_id
     where r.rank <= $2 or r.player_id = $3 order by r.rank, r.ended_at limit $2 + 1`, [mode, limit, me || null]);
-  const rows = r.rows.map((x) => ({ rank: Number(x.rank), mine: !!x.mine, name: x.name, country: x.country, score: Number(x.score), kos: Number(x.kos) || 0, games: Number(x.games), at: x.at }));
+  // sin nombre propio (el que pone el juego: Tú, You, Você…): "anon" + una marca corta y fija por jugador, así no
+  // parecen todos la misma persona (la marca sale de un hash del id: no lo revela)
+  const rows = r.rows.map((x) => ({ rank: Number(x.rank), mine: !!x.mine, name: DEFAULT_NAMES.has((x.name || '').trim()) ? null : x.name, anon: DEFAULT_NAMES.has((x.name || '').trim()), tag: x.tag, country: x.country, score: Number(x.score), kos: Number(x.kos) || 0, games: Number(x.games), at: x.at }));
   const list = rows.filter((x) => x.rank <= limit).slice(0, limit);
   const mine = rows.find((x) => x.mine) || null;
   return { list, me: mine ? { rank: mine.rank, score: mine.score } : null };
