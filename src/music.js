@@ -4,7 +4,10 @@ import { sfx } from './sfx.js';
 
 class Music {
   constructor() {
-    this.vol = 0.4; // 0..1 (lo cambia Opciones)
+    // volumen = base (el general que elige el admin) × el de cada canción (admin) × vol (el de cada jugador, Opciones)
+    this.vol = 1;
+    this.base = 0.4;
+    this.cur = null;
     this.list = null;
     this.order = [];
     this.i = -1;
@@ -19,8 +22,10 @@ class Music {
     if (this.started) return;
     this.started = true;
     try {
-      const r = await fetch('/api/music', { cache: 'no-store' });
-      this.list = r.ok ? await r.json() : [];
+      const r = await fetch('/api/music?v=2', { cache: 'no-store' });
+      const d = r.ok ? await r.json() : null;
+      this.list = d?.list || [];
+      if (Number.isFinite(d?.base)) this.base = d.base;
     } catch { this.list = []; }
     if (!this.list.length) { this.onChange?.(); return; }
     this.audio = new Audio();
@@ -43,6 +48,7 @@ class Music {
       this.i = 0;
     }
     const t = this.list[this.order[this.i]];
+    this.cur = t;
     this.title = t.title;
     this.audio.src = `/api/music/${t.file}`;
     this.apply();
@@ -54,7 +60,7 @@ class Music {
   setVol(v) { this.vol = Math.max(0, Math.min(1, v)); this.apply(); }
   apply() {
     if (!this.audio) return;
-    const v = sfx.muted ? 0 : this.vol;
+    const v = sfx.muted ? 0 : Math.min(1, this.base * (this.cur?.vol ?? 1) * this.vol);
     this.audio.volume = v;
     if (v === 0 && !this.audio.paused) this.audio.pause();
     else if (v > 0 && this.audio.paused && this.audio.src) this.audio.play().catch(() => {});

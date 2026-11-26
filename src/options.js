@@ -80,7 +80,7 @@ export class Options {
     $$('.op-mute button').forEach((b) => click(b, () => { ctx.sfx.muted = b.dataset.k === 'off'; this.prefs.muted = ctx.sfx.muted; savePrefs(this.prefs); music.apply(); this._render(); }));
     // música de fondo: volumen aparte y "otra canción"
     const mvol = $('.op-mvol input');
-    mvol.addEventListener('input', () => { music.setVol(mvol.value / 100); this.prefs.musicVol = music.vol; savePrefs(this.prefs); this._render(); });
+    mvol.addEventListener('input', () => { music.setVol(mvol.value / 100); this.prefs.musicRel = music.vol; savePrefs(this.prefs); this._render(); });
     click($('.op-mnext'), () => music.next());
     music.onChange = () => this._render();
     $$('.op-langs button').forEach((b) => click(b, () => setLang(b.dataset.k)));
@@ -91,7 +91,7 @@ export class Options {
     // lo guardado (sonido y fluidez)
     if (this.prefs.volume != null) ctx.sfx.master = this.prefs.volume;
     if (this.prefs.muted != null) ctx.sfx.muted = this.prefs.muted;
-    if (this.prefs.musicVol != null) music.setVol(this.prefs.musicVol);
+    if (this.prefs.musicRel != null) music.setVol(this.prefs.musicRel);
     if (FPS.includes(this.prefs.fps)) ctx.setFps(this.prefs.fps);
 
     // Esc abre/cierra · capturar la tecla nueva (va antes que el resto del juego)

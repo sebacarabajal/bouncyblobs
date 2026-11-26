@@ -354,12 +354,39 @@ async function musicSection() {
     if (!r.ok) throw new Error(r.status === 413 ? 'pasa de 20 MB' : r.status === 400 ? 'formato no admitido' : `error ${r.status}`);
     return r.json();
   };
+  // volumen: el general (para todos los jugadores) × el de cada canción. Al escucharla acá suena como en el juego
+  // (con el volumen de música del jugador al 100 %, que es como arranca)
+  const pctTxt = (v) => `${Math.round(v * 100)} %`;
+  const players = [];
+  let base = 0.4;
+  const baseIn = el('input', { type: 'range', min: '0', max: '100', step: '1', 'aria-label': 'Volumen general de la música' });
+  const baseTxt = el('span', { class: 'snd-v' });
+  const applyBase = () => { base = baseIn.value / 100; baseTxt.textContent = pctTxt(base); for (const p of players) p(); };
+  baseIn.addEventListener('input', applyBase);
+  baseIn.addEventListener('change', async () => {
+    try {
+      const r = await fetch(`/api/admin/music/base?vol=${base}`, { method: 'POST' });
+      if (!r.ok) throw new Error(`error ${r.status}`);
+      say(`Volumen general: ${pctTxt(base)}. Lo escuchan así quienes abran el juego desde ahora.`);
+    } catch (e) { say(`No se guardó (${e.message}).`, true); }
+  });
   const load = async () => {
-    const list = await (await fetch('/api/admin/music', { cache: 'no-store' })).json();
+    const d = await (await fetch('/api/admin/music', { cache: 'no-store' })).json();
+    const list = d.list || [];
+    baseIn.value = String(Math.round((d.base ?? 0.4) * 100));
+    players.length = 0;
     const on = list.filter((x) => x.enabled).length;
     body.replaceChildren(
       el('p', { class: 'sub' }, list.length ? `${list.length} ${list.length === 1 ? 'canción' : 'canciones'} · ${on} ${on === 1 ? 'activa' : 'activas'}. En el juego suenan las activas en orden al azar, una tras otra.` : 'Todavía no hay música: el juego suena sin música de fondo.'),
       list.length ? el('div', { class: 'mus' }, list.map((x) => {
+        const audio = el('audio', { controls: true, preload: 'none', src: `/api/music/${x.file}` });
+        const vIn = el('input', { type: 'range', min: '0', max: '100', step: '1', value: String(Math.round(x.vol * 100)), 'aria-label': `Volumen de ${x.title}` });
+        const vTxt = el('span', { class: 'snd-v' });
+        const upd = () => { const v = vIn.value / 100; vTxt.textContent = pctTxt(v); audio.volume = Math.min(1, base * v); };
+        players.push(upd);
+        vIn.addEventListener('input', upd);
+        vIn.addEventListener('change', async () => { try { await req('PATCH', { id: x.id, vol: vIn.value / 100 }); say(`"${x.title}": volumen ${pctTxt(vIn.value / 100)}.`); } catch (e) { say(`No se guardó (${e.message}).`, true); } });
+        upd();
         const title = el('input', { type: 'text', value: x.title, maxlength: '80', 'aria-label': 'Nombre de la canción' });
         title.addEventListener('change', async () => { try { await req('PATCH', { id: x.id, title: title.value }); say('Nombre guardado.'); } catch (e) { say(`No se guardó (${e.message}).`, true); } });
         const act = el('input', { type: 'checkbox', checked: x.enabled });
@@ -368,10 +395,11 @@ async function musicSection() {
           if (!confirm(`¿Borrar "${x.title}"? No se puede deshacer.`)) return;
           try { await req('DELETE', { id: x.id }); say(`"${x.title}" borrada.`); load(); } catch (e) { say(`No se pudo borrar (${e.message}).`, true); }
         } }, '🗑 Borrar');
-        return el('div', { class: `mus-row ${x.enabled ? '' : 'off'}` }, title,
-          el('audio', { controls: true, preload: 'none', src: `/api/music/${x.file}` }),
-          el('label', { class: 'chk' }, act, 'Activa'), el('small', {}, `${x.ext.toUpperCase()} · ${kb(x.size)}`), del);
+        return el('div', { class: `mus-row ${x.enabled ? '' : 'off'}` }, title, audio,
+          el('label', { class: 'chk' }, act, 'Activa'), el('small', {}, `${x.ext.toUpperCase()} · ${kb(x.size)}`), del,
+          el('label', { class: 'snd-vol mus-vol' }, 'Volumen de esta canción', vIn, vTxt));
       })) : null);
+    applyBase();
   };
   const picker = el('input', { type: 'file', multiple: true, accept: 'audio/*,.mp3,.ogg,.m4a,.aac,.wav,.flac,.webm,.opus', style: 'display:none' });
   picker.addEventListener('change', async () => {
@@ -391,7 +419,10 @@ async function musicSection() {
   });
   await load();
   return card('🎵 Música de fondo', 'Sube canciones (mp3, ogg, m4a, aac, wav, flac, webm u opus; hasta 20 MB cada una). Puedes elegir varias a la vez. Usa música libre o con licencia para juegos.', '',
-    el('div', { class: 'toolbar' }, el('button', { type: 'button', class: 'btn main', onclick: () => picker.click() }, '📂 Subir canciones…')), msg, picker, body);
+    el('div', { class: 'toolbar' }, el('button', { type: 'button', class: 'btn main', onclick: () => picker.click() }, '📂 Subir canciones…')),
+    el('label', { class: 'snd-vol mus-base' }, el('b', {}, 'Volumen general de la música en el juego'), baseIn, baseTxt),
+    el('p', { class: 'sub' }, 'Es el volumen con el que arranca para todos. Cada canción tiene además su propio ajuste (sirve para emparejar una que vino más fuerte o más bajita). Cada jugador puede bajarla o subirla en Opciones → Sonido, a partir de este volumen.'),
+    msg, picker, body);
 }
 
 // ================================================================ sonidos (reemplazar los del juego)

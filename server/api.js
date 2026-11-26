@@ -238,7 +238,12 @@ export function createApi({ pool, env, realtime = null }) {
         return true;
       }
       // música de fondo: la lista (sólo las activas) y cada canción (por partes, como piden los reproductores)
-      if (url.pathname === '/api/music' && req.method === 'GET') { send(res, 200, await music.publicList(pool)); return true; }
+      if (url.pathname === '/api/music' && req.method === 'GET') {
+        const pl = await music.publicList(pool);
+        // (sin v=2: la lista sola, como la pedían las páginas de antes)
+        send(res, 200, url.searchParams.get('v') === '2' ? pl : pl.list.map(({ id, title, file }) => ({ id, title, file })));
+        return true;
+      }
       if (url.pathname.startsWith('/api/music/') && req.method === 'GET') {
         const f = await music.file(pool, url.pathname.slice('/api/music/'.length));
         if (!f) return send(res, 404, { error: 'no existe' }), true;
@@ -302,7 +307,15 @@ export function createApi({ pool, env, realtime = null }) {
             return true;
           }
         }
-        // música: subir (una por pedido), renombrar, activar/desactivar, borrar
+        // música: volumen general para todos los jugadores (0 a 1)
+        if (url.pathname === '/api/admin/music/base' && req.method === 'POST') {
+          const v = num(url.searchParams.get('vol'), 0, 1);
+          if (v == null) return send(res, 400, { error: 'volumen' }), true;
+          await music.setBase(pool, Math.round(v * 100) / 100);
+          send(res, 200, { ok: true });
+          return true;
+        }
+        // música: subir (una por pedido), renombrar, activar/desactivar, volumen de cada una, borrar
         if (url.pathname === '/api/admin/music') {
           if (req.method === 'GET') { send(res, 200, await music.adminList(pool)); return true; }
           if (req.method === 'POST') {
@@ -319,8 +332,8 @@ export function createApi({ pool, env, realtime = null }) {
           const id = int(url.searchParams.get('id'), 1, 1e9);
           if (!id) return send(res, 400, { error: 'id' }), true;
           if (req.method === 'PATCH') {
-            const t = url.searchParams.get('title'), en = url.searchParams.get('enabled');
-            await music.update(pool, id, { title: t == null ? null : t.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) || 'Sin nombre', enabled: en == null ? null : en === '1' });
+            const t = url.searchParams.get('title'), en = url.searchParams.get('enabled'), v = num(url.searchParams.get('vol'), 0, 1);
+            await music.update(pool, id, { title: t == null ? null : t.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) || 'Sin nombre', enabled: en == null ? null : en === '1', vol: v == null ? null : Math.round(v * 100) / 100 });
             send(res, 200, { ok: true });
             return true;
           }
