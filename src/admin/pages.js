@@ -343,6 +343,98 @@ async function roomsPage() {
   return { nodes: [card('Salas en tiempo real', 'Se actualiza cada 2 segundos. Al entrar a jugar ocupas el lugar de un bot (sólo si la sala tiene lugar).', '', body)], cleanup: () => clearInterval(iv) };
 }
 
+// ================================================================ sonidos (reemplazar los del juego)
+const SAMPLE = { hit: 18, land: 8, bump: 14 }; // un valor de ejemplo para los que cambian según la fuerza
+const EXTS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'webm'];
+const kb = (b) => (b == null ? '' : b < 1024 * 1024 ? `${Math.max(1, Math.round(b / 1024))} KB` : `${(b / 1048576).toFixed(1)} MB`);
+async function soundsPage() {
+  const sfxMod = await import('../sfx.js');
+  const { SOUNDS, sfx, sfxVol, unlockAudio, setSoundOverride, clearSoundOverride } = sfxMod;
+  const r = await fetch('/api/admin/sounds', { cache: 'no-store' });
+  if (r.status === 403) throw new Error('Sin permiso.');
+  if (!r.ok) throw new Error(`Error ${r.status} del servidor.`);
+  const saved = Object.fromEntries((await r.json()).map((x) => [x.key, x]));
+  // lo que ya está subido suena acá igual que en el juego
+  await Promise.all(Object.values(saved).filter((x) => x.file).map(async (x) => {
+    try { const a = await fetch(`/api/sfx/${x.file}`); if (a.ok) await setSoundOverride(x.key, await a.arrayBuffer(), x.file); } catch { /* suena el original */ }
+  }));
+  for (const x of Object.values(saved)) sfxVol[x.key] = x.vol;
+
+  const msg = el('div', { class: 'snd-msg', role: 'status' });
+  const say = (t, bad = false) => { msg.textContent = t; msg.className = `snd-msg ${bad ? 'bad' : 'ok'}`; clearTimeout(say.t); say.t = setTimeout(() => { msg.textContent = ''; }, 5000); };
+  const picker = el('input', { type: 'file', accept: 'audio/*,.mp3,.wav,.ogg,.m4a,.flac,.webm', style: 'display:none' });
+  const play = (key) => { unlockAudio(); sfx[key]?.(SAMPLE[key] ?? 1); };
+
+  const cardFor = (snd) => {
+    const st = el('div', { class: 'snd-st' });
+    const origBtn = el('button', { type: 'button', class: 'btn' }, '↺ Original');
+    const volIn = el('input', { type: 'range', min: '0', max: '2', step: '0.05', value: String(saved[snd.key]?.vol ?? 1), 'aria-label': `Volumen de ${snd.name}` });
+    const volTxt = el('span', { class: 'snd-v' });
+    const show = () => {
+      const x = saved[snd.key];
+      st.replaceChildren(x?.file ? badge(`🎵 Archivo propio · ${x.ext.toUpperCase()} · ${kb(x.size)}`, 'live') : badge('🎹 Original (sintetizado)'));
+      origBtn.hidden = !x?.file;
+      volTxt.textContent = `${Math.round(Number(volIn.value) * 100)} %`;
+    };
+    const replace = () => {
+      picker.value = '';
+      picker.onchange = async () => {
+        const file = picker.files[0];
+        if (!file) return;
+        const ext = (file.name.split('.').pop() || '').toLowerCase();
+        if (!EXTS.includes(ext)) return say(`Ese formato no sirve (usa ${EXTS.join(', ')}).`, true);
+        if (file.size > 3 * 1024 * 1024) return say('El archivo pasa de 3 MB: recórtalo o bájale la calidad.', true);
+        const ab = await file.arrayBuffer();
+        unlockAudio();
+        say(`Subiendo ${file.name}…`);
+        try {
+          const up = await fetch(`/api/admin/sounds/file?key=${snd.key}&ext=${ext}`, { method: 'POST', body: ab, headers: { 'Content-Type': 'application/octet-stream' } });
+          if (!up.ok) throw new Error(up.status === 413 ? 'muy grande' : `error ${up.status}`);
+          await setSoundOverride(snd.key, ab.slice(0), `${snd.key}.${ext}`);
+          saved[snd.key] = { ...(saved[snd.key] || {}), key: snd.key, ext, size: file.size, file: `${snd.key}.${ext}`, vol: Number(volIn.value) };
+          show(); play(snd.key);
+          say(`🎵 ${snd.name}: listo. Ya suena así en el juego para quien lo abra desde ahora.`);
+        } catch (e) { say(`No se pudo subir (${e.message}).`, true); }
+      };
+      picker.click();
+    };
+    origBtn.addEventListener('click', async () => {
+      try {
+        const d = await fetch(`/api/admin/sounds/file?key=${snd.key}`, { method: 'DELETE' });
+        if (!d.ok) throw new Error(`error ${d.status}`);
+        clearSoundOverride(snd.key);
+        if (saved[snd.key]) { saved[snd.key].file = null; saved[snd.key].ext = null; }
+        show(); play(snd.key);
+        say(`🎹 ${snd.name}: volvió al original.`);
+      } catch (e) { say(`No se pudo (${e.message}).`, true); }
+    });
+    volIn.addEventListener('input', () => { sfxVol[snd.key] = Number(volIn.value); show(); });
+    volIn.addEventListener('change', async () => {
+      play(snd.key);
+      try {
+        const v = await fetch(`/api/admin/sounds/vol?key=${snd.key}&vol=${volIn.value}`, { method: 'POST' });
+        if (!v.ok) throw new Error(`error ${v.status}`);
+        saved[snd.key] = { ...(saved[snd.key] || { key: snd.key }), vol: Number(volIn.value) };
+      } catch (e) { say(`No se guardó el volumen (${e.message}).`, true); }
+    });
+    const copy = el('button', { type: 'button', class: 'btn', onclick: async () => {
+      try { await navigator.clipboard.writeText(snd.prompt); say('📋 Prompt copiado: pégalo en una IA de efectos de sonido (por ejemplo ElevenLabs → Sound Effects).'); }
+      catch { say('No se pudo copiar.', true); }
+    } }, '📋 Copiar prompt');
+    show();
+    return el('div', { class: 'snd' },
+      el('div', { class: 'snd-top' }, el('b', {}, snd.name), st),
+      el('p', { class: 'snd-when' }, `Suena cuando ${snd.when}.`),
+      el('div', { class: 'snd-btns' },
+        el('button', { type: 'button', class: 'btn main', onclick: () => play(snd.key) }, '▶ Probar'),
+        el('button', { type: 'button', class: 'btn', onclick: replace }, '📂 Reemplazar…'), origBtn, copy),
+      el('label', { class: 'snd-vol' }, 'Volumen', volIn, volTxt));
+  };
+  const n = Object.values(saved).filter((x) => x.file).length;
+  return [card('Sonidos', `Cada sonido del juego. Reemplazarlo sube el archivo al servidor y lo usa todo el que abra el juego desde ese momento (mp3, wav, ogg, m4a, flac o webm, hasta 3 MB). ${n ? `Hay ${n} ${n === 1 ? 'reemplazado' : 'reemplazados'}.` : 'Todavía suenan todos los originales.'}`, '',
+    msg, picker, el('div', { class: 'snds' }, SOUNDS.map(cardFor)))];
+}
+
 export const PAGES = {
   resumen: { title: 'Resumen', render: overview },
   jugadores: { title: 'Jugadores', render: playersPage },
@@ -352,4 +444,5 @@ export const PAGES = {
   red: { title: 'Red en línea', render: netPage },
   audiencia: { title: 'Audiencia', render: audiencePage },
   salas: { title: 'Salas en vivo', noFilters: true, render: roomsPage },
+  sonidos: { title: 'Sonidos', noFilters: true, render: soundsPage },
 };

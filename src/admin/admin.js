@@ -11,7 +11,7 @@ if (import.meta.env?.DEV) $('#play').href = '/';
 export const FILTER_KEYS = ['days', 'country', 'os', 'browser', 'device', 'gpu', 'ver', 'kind', 'bots'];
 const TABS = [
   ['resumen', 'Resumen'], ['jugadores', 'Jugadores'], ['sesiones', 'Visitas'], ['rendimiento', 'Rendimiento'],
-  ['red', 'Red en línea'], ['audiencia', 'Audiencia'], ['salas', 'Salas en vivo'],
+  ['red', 'Red en línea'], ['audiencia', 'Audiencia'], ['salas', 'Salas en vivo'], ['sonidos', 'Sonidos'],
 ];
 
 export function route() {

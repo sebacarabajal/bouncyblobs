@@ -28,19 +28,28 @@ export function unlockAudio() {
 
 const SFX_URL = 'sfx/'; // relativo a la página (en el build también)
 // al abrir el juego: trae los reemplazos que haya (si no hay ninguno, el 404 no molesta)
+// Dos fuentes: los que vienen con el juego (public/sfx, los guarda el admin en modo desarrollo) y los subidos en
+// el panel del admin (servidor, /api/sfx). Los del servidor mandan.
+const SERVER_SFX = '/api/sfx/';
 export async function loadSoundOverrides() {
-  try {
-    const r = await fetch(SFX_URL + 'sounds.json', { cache: 'no-store' });
-    if (!r.ok) return;
-    const m = await r.json();
-    Object.assign(sfxVol, m.vol || {});
-    await Promise.all(Object.entries(m.files || {}).map(async ([k, f]) => {
-      const a = await fetch(SFX_URL + f, { cache: 'no-store' });
+  const get = async (base) => {
+    try { const r = await fetch(base + 'sounds.json', { cache: 'no-store' }); return r.ok ? { base, m: await r.json() } : null; } catch { return null; }
+  };
+  const [local, server] = await Promise.all([get(SFX_URL), get(SERVER_SFX)]);
+  const files = {};
+  for (const src of [local, server]) {
+    if (!src) continue;
+    Object.assign(sfxVol, src.m.vol || {});
+    for (const [k, f] of Object.entries(src.m.files || {})) files[k] = { url: src.base + f, f };
+  }
+  await Promise.all(Object.entries(files).map(async ([k, { url, f }]) => {
+    try {
+      const a = await fetch(url, { cache: url.startsWith(SERVER_SFX) ? 'default' : 'no-store' });
       if (!a.ok) return;
       sfxFiles[k] = f;
       await decodeLater(k, await a.arrayBuffer());
-    }));
-  } catch { /* sin reemplazos */ }
+    } catch { /* sin ese archivo: suena el original */ }
+  }));
 }
 
 // reemplazo elegido en el admin: suena al toque (aunque no se haya podido guardar)

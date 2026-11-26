@@ -3,6 +3,7 @@
 import { adminUser } from './auth.js';
 import * as stats from './stats.js';
 import { parseUA, refineUA, gpuVendor, clientIP } from './ua.js';
+import * as sounds from './sounds.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v, max = 60) => (typeof v === 'string' ? v.slice(0, max).replace(/[\u0000-\u001f]/g, '') : null);
@@ -21,14 +22,15 @@ function limited(ip, max = 60) {
 }
 setInterval(() => { const now = Date.now(); for (const [k, h] of hits) if (now - h.t > 60e3) hits.delete(k); }, 60e3).unref();
 
-function readBody(req, max = 32768) {
+function readRaw(req, max = 32768) {
   return new Promise((resolve, reject) => {
     let n = 0; const chunks = [];
     req.on('data', (c) => { n += c.length; if (n > max) { reject(new Error('grande')); req.destroy(); } else chunks.push(c); });
-    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
+const readBody = async (req, max) => (await readRaw(req, max)).toString('utf8');
 
 const send = (res, code, obj, cache = 'no-store') => {
   res.statusCode = code;
@@ -224,6 +226,16 @@ export function createApi({ pool, env, realtime = null }) {
         res.statusCode = code; res.end();
         return true;
       }
+      // sonidos reemplazados desde el panel (los pide el juego al abrir)
+      if (url.pathname === '/api/sfx/sounds.json' && req.method === 'GET') { send(res, 200, await sounds.manifest(pool)); return true; }
+      if (url.pathname.startsWith('/api/sfx/') && req.method === 'GET') {
+        const f = await sounds.file(pool, url.pathname.slice('/api/sfx/'.length));
+        if (!f) return send(res, 404, { error: 'no existe' }), true;
+        res.setHeader('Content-Type', f.mime || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // (cada reemplazo tiene otro nombre)
+        res.end(f.data);
+        return true;
+      }
       if (url.pathname === '/api/records' && req.method === 'GET') {
         const mode = MODES.has(url.searchParams.get('mode')) ? url.searchParams.get('mode') : 'ffa';
         const sp = url.searchParams;
@@ -240,6 +252,31 @@ export function createApi({ pool, env, realtime = null }) {
       if (url.pathname.startsWith('/api/admin/')) {
         const who = await adminUser(req, env);
         if (!who) return send(res, 403, { error: 'sin permiso' }), true;
+        // sonidos: subir un reemplazo, volver al original, volumen
+        if (url.pathname.startsWith('/api/admin/sounds')) {
+          const key = url.searchParams.get('key') || '';
+          if (url.pathname === '/api/admin/sounds' && req.method === 'GET') { send(res, 200, await sounds.list(pool)); return true; }
+          if (!sounds.SOUND_KEY.test(key)) return send(res, 400, { error: 'clave' }), true;
+          if (url.pathname === '/api/admin/sounds/file' && req.method === 'POST') {
+            const ext = String(url.searchParams.get('ext') || '').toLowerCase();
+            if (!sounds.SOUND_EXT[ext]) return send(res, 400, { error: 'formato' }), true;
+            if (Number(req.headers['content-length']) > sounds.SOUND_MAX) return send(res, 413, { error: 'muy grande' }), true;
+            let data;
+            try { data = await readRaw(req, sounds.SOUND_MAX); } catch { return send(res, 413, { error: 'muy grande' }), true; }
+            if (!data.length) return send(res, 400, { error: 'vacío' }), true;
+            await sounds.upload(pool, key, ext, data);
+            send(res, 200, { ok: true });
+            return true;
+          }
+          if (url.pathname === '/api/admin/sounds/file' && req.method === 'DELETE') { await sounds.remove(pool, key); send(res, 200, { ok: true }); return true; }
+          if (url.pathname === '/api/admin/sounds/vol' && req.method === 'POST') {
+            const v = num(url.searchParams.get('vol'), 0, 3);
+            if (v == null) return send(res, 400, { error: 'volumen' }), true;
+            await sounds.setVol(pool, key, Math.round(v * 100) / 100);
+            send(res, 200, { ok: true });
+            return true;
+          }
+        }
         // panel: una ruta por página; todas aceptan los mismos filtros (ver stats.parseFilters)
         const sp = url.searchParams, f = stats.parseFilters(sp), tz = env.REPORT_TZ || 'America/Argentina/Buenos_Aires';
         const q = sp.get('q') ? String(sp.get('q')).trim().slice(0, 60) || null : null;
