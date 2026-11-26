@@ -25,26 +25,26 @@ export const SLOTS = 16;
 
 // los bots (y los lugares de la sala: un jugador real reemplaza a uno de estos)
 export const BOT_DEFS = [
-  { name: 'Tú', color: '#ff4fa3', shape: 'round', brow: 0.35, spawn: [0, 0, 5] },
-  { name: 'Limón', color: '#ffc21a', shape: 'round', brow: 0.45, spawn: [-6, 0, -3] },
-  { name: 'Celeste', color: '#2fc8ff', shape: 'tall', brow: -0.15, spawn: [6, 0, -3] },
-  { name: 'Uva', color: '#a24dff', shape: 'drop', brow: 0.5, spawn: [0, 0, -8] },
-  { name: 'Lima', color: '#7be22a', shape: 'bean', brow: 0.2, spawn: [-8, 0, 4] },
-  { name: 'Mandarina', color: '#ff7a1a', shape: 'drop', brow: 0.55, spawn: [8, 0, 4] },
-  { name: 'Arándano', color: '#3d6bff', shape: 'tall', brow: 0.3, spawn: [-4, 0, 9] },
-  { name: 'Menta', color: '#22e0b4', shape: 'box', brow: 0.4, spawn: [4, 0, 9] },
-  { name: 'Frutilla', color: '#ff2f4f', shape: 'round', brow: 0.5, spawn: [-10, 0, -8] },
+  { name: 'Bubblegum', color: '#ff4fa3', shape: 'round', brow: 0.35, spawn: [0, 0, 5] },
+  { name: 'Lemon', color: '#ffc21a', shape: 'round', brow: 0.45, spawn: [-6, 0, -3] },
+  { name: 'Sky', color: '#2fc8ff', shape: 'tall', brow: -0.15, spawn: [6, 0, -3] },
+  { name: 'Grape', color: '#a24dff', shape: 'drop', brow: 0.5, spawn: [0, 0, -8] },
+  { name: 'Lime', color: '#7be22a', shape: 'bean', brow: 0.2, spawn: [-8, 0, 4] },
+  { name: 'Tangerine', color: '#ff7a1a', shape: 'drop', brow: 0.55, spawn: [8, 0, 4] },
+  { name: 'Blueberry', color: '#3d6bff', shape: 'tall', brow: 0.3, spawn: [-4, 0, 9] },
+  { name: 'Mint', color: '#22e0b4', shape: 'box', brow: 0.4, spawn: [4, 0, 9] },
+  { name: 'Strawberry', color: '#ff2f4f', shape: 'round', brow: 0.5, spawn: [-10, 0, -8] },
   { name: 'Kiwi', color: '#9bd400', shape: 'box', brow: 0.1, spawn: [10, 0, -8] },
-  { name: 'Coco', color: '#f2ece0', shape: 'bean', brow: 0.3, spawn: [-11, 0, 0] },
-  { name: 'Mora', color: '#c0137a', shape: 'box', brow: 0.6, spawn: [11, 0, 0] },
+  { name: 'Coconut', color: '#f2ece0', shape: 'bean', brow: 0.3, spawn: [-11, 0, 0] },
+  { name: 'Mulberry', color: '#c0137a', shape: 'box', brow: 0.6, spawn: [11, 0, 0] },
   // las 4 de abajo sólo juegan en arenas grandes (arena.players, ej. Steampunk = 16)
-  { name: 'Chocolate', color: '#7a4428', shape: 'tall', brow: 0.4, spawn: [-14, 0, 6] },
-  { name: 'Durazno', color: '#ffb18a', shape: 'bean', brow: 0.2, spawn: [14, 0, 6] },
-  { name: 'Ciruela', color: '#4b1d84', shape: 'bean', brow: 0.5, spawn: [-14, 0, -6] },
-  { name: 'Pistacho', color: '#b8c97a', shape: 'drop', brow: 0.3, spawn: [14, 0, -6] },
+  { name: 'Cocoa', color: '#7a4428', shape: 'tall', brow: 0.4, spawn: [-14, 0, 6] },
+  { name: 'Peach', color: '#ffb18a', shape: 'bean', brow: 0.2, spawn: [14, 0, 6] },
+  { name: 'Plum', color: '#4b1d84', shape: 'bean', brow: 0.5, spawn: [-14, 0, -6] },
+  { name: 'Pistachio', color: '#b8c97a', shape: 'drop', brow: 0.3, spawn: [14, 0, -6] },
 ];
 // nombres de repuesto para cuando un bot vuelve a ocupar el lugar que dejó un jugador
-const SPARE_NAMES = ['Limón', 'Celeste', 'Uva', 'Lima', 'Mandarina', 'Arándano', 'Menta', 'Frutilla', 'Kiwi', 'Coco', 'Mora', 'Chocolate', 'Durazno', 'Ciruela', 'Pistacho', 'Pomelo', 'Cereza', 'Mango', 'Ananá', 'Grosella'];
+const SPARE_NAMES = ['Lemon', 'Sky', 'Grape', 'Lime', 'Tangerine', 'Blueberry', 'Mint', 'Strawberry', 'Kiwi', 'Coconut', 'Mulberry', 'Cocoa', 'Peach', 'Plum', 'Pistachio', 'Grapefruit', 'Cherry', 'Mango', 'Pineapple', 'Currant'];
 
 const _n = new THREE.Vector3();
 const _p = new THREE.Vector3();
