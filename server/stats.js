@@ -271,7 +271,7 @@ const PERF_DIMS = {
   gpu: "regexp_replace(coalesce(s.gpu, '?'), '^ANGLE \\((.*)\\)$', '\\1')", country: 's.country', screen: 's.screen', device: 's.device',
   cores: "s.cores::text || ' núcleos'", ram: "s.ram::text || ' GB'",
   // la frecuencia medida (143, 144,7…) al valor de monitor más cercano
-  hz: `(case when s.hz < 65 then 60 when s.hz < 82 then 75 when s.hz < 95 then 90 when s.hz < 110 then 100 when s.hz < 132 then 120
+  hz: `(case when s.hz is null then null when s.hz < 65 then 60 when s.hz < 82 then 75 when s.hz < 95 then 90 when s.hz < 110 then 100 when s.hz < 132 then 120
          when s.hz < 155 then 144 when s.hz < 200 then 165 when s.hz < 270 then 240 else 360 end)::text || ' Hz'`,
 };
 const PERF_AGG = `count(*) as n, count(distinct s.player_id) as players, ${FPS} as fps, avg((s.fps_avg >= 55)::int) as fluid,
