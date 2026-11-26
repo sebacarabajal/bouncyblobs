@@ -189,12 +189,36 @@ export const SOUNDS = [
 ].map((x) => ({ ...x, prompt: `${x.p} ${TAIL}` }));
 const BY_KEY = Object.fromEntries(SOUNDS.map((x) => [x.key, x]));
 
+// De dónde sale cada sonido: lo tuyo (y lo que te pasa a vos) suena fuerte; lo de los demás, más bajo y según
+// la distancia, como en los juegos con sonido "en el espacio". ear.me = tu blob · ear.pos() = dónde escuchás
+// ({x, z}: tu blob, o adonde mira la cámara si estás afuera) o null = todo igual (menú, tutorial…).
+export const ear = { me: null, pos: null };
+let SRC = null;
+// soundAt(fuente, () => sfx.x()): fuente = un blob, un punto {x, z} o 'me' (sin fuente: volumen normal)
+export function soundAt(src, fn) { const prev = SRC; SRC = src; try { fn(); } finally { SRC = prev; } }
+const OTHERS = 0.7, HALF_AT = 10; // los demás: 70 % pegados a vos, la mitad de eso a 10 m, casi nada a 30 m
+function spatial() {
+  if (!SRC || SRC === 'me' || SRC === ear.me) return 1;
+  const l = ear.pos?.();
+  const p = SRC.pos || SRC;
+  if (!l || p.x == null) return 1;
+  const d = Math.hypot(p.x - l.x, p.z - l.z);
+  return OTHERS / (1 + (d / HALF_AT) ** 2);
+}
+// el mismo sonido muchas veces juntas (diez blobs saltando a la vez): suena el más fuerte, no todos
+const lastPlay = {};
+
 // lo que llama el juego: si hay archivo, suena el archivo; si no, el sintetizado
 export const sfx = { muted: false, master: 1 }; // master = volumen general (Opciones)
 for (const key of Object.keys(synth)) {
   sfx[key] = (...args) => {
     if (!ctx || sfx.muted) return;
-    const vol = (sfxVol[key] ?? 1) * sfx.master;
+    const sp = spatial();
+    if (sp < 0.03) return; // muy lejos: no se oye
+    const vol = (sfxVol[key] ?? 1) * sfx.master * sp;
+    const now = ctx.currentTime, lp = lastPlay[key];
+    if (lp && now - lp.t < 0.06 && lp.v >= vol) return;
+    lastPlay[key] = { t: now, v: vol };
     const b = buffers.get(key);
     if (b) {
       const info = BY_KEY[key];

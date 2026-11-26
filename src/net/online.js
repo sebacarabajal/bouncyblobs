@@ -16,7 +16,7 @@
 // En el navegador, tu blob siempre es jellies[0]: el id del servidor se mapea a ese lugar.
 import * as THREE from 'three';
 import { fx } from '../fx.js';
-import { sfx } from '../sfx.js';
+import { sfx, soundAt } from '../sfx.js';
 import { STEP, Sim, hitEffects } from '../game/sim.js';
 import { setSimStep } from '../jelly.js';
 import { CONFIG } from '../config.js';
@@ -529,7 +529,8 @@ export class Online {
         if (e[2] === 'jump' && performance.now() - (this.jelly(who)?.lastJump || -1e9) < 500) break; // ya sonó acá (el plan del bot)
         let args = e.slice(4).map(dec);
         if (['sawWarn', 'sawRise', 'spikesWarn', 'spikesUp'].includes(e[2])) args = [1];
-        sfx[e[2]]?.(...args);
+        // de quién es (who): el tuyo suena fuerte, el de otros según la distancia; los de la arena, normal
+        soundAt(who === this.you ? 'me' : who >= 0 ? this.jelly(who) || null : null, () => sfx[e[2]]?.(...args));
         break;
       }
       case 'hit': this._serverHit(step, e); break;
@@ -582,7 +583,7 @@ export class Online {
           const cr = Online.tune.chainRel;
           if (rel > cr && time < (a.flyUntil || 0)) this._chainHit(a, b, _v, rel);
           else if (rel > cr && time < (b.flyUntil || 0)) this._chainHit(b, a, _v.clone().negate(), rel);
-          else if (rel > 7 && this.presentStep - (this.bumpAt.get(key) || -99) > 30) { this.bumpAt.set(key, this.presentStep); sfx.bump(rel); }
+          else if (rel > 7 && this.presentStep - (this.bumpAt.get(key) || -99) > 30) { this.bumpAt.set(key, this.presentStep); soundAt(a === this.sim.jellies[0] || b === this.sim.jellies[0] ? 'me' : a, () => sfx.bump(rel)); }
         }
       }
     }
@@ -673,7 +674,7 @@ export class Online {
     // ¿ya lo mostraste (lo predijiste al verlos tocarse)? Entonces sólo falta lo que no se puede adivinar (el mareo)
     const p = this.predicted.find((x) => !x.ok && x.att === att && x.vic === vic && Math.abs(x.step - step) < 45);
     if (p) {
-      p.ok = true; p.srv = step; this.stats.confirmed++; if (p.claim) this.stats.claimsOk++; if (e[8]) sfx.dizzy();
+      p.ok = true; p.srv = step; this.stats.confirmed++; if (p.claim) this.stats.claimsOk++; if (e[8]) soundAt(vic === me ? 'me' : vic, () => sfx.dizzy());
       if (this.debug) { const n = dec(e[5]); (this.stats.kList ||= []).push({ dK: p.K - e[6], K: e[6], ang: Math.acos(Math.max(-1, Math.min(1, p.nx * n.x + p.nz * n.z))), dStep: p.step - step, src: p.src }); }
       return;
     }

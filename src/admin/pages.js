@@ -343,6 +343,57 @@ async function roomsPage() {
   return { nodes: [card('Salas en tiempo real', 'Se actualiza cada 2 segundos. Al entrar a jugar ocupas el lugar de un bot (sólo si la sala tiene lugar).', '', body)], cleanup: () => clearInterval(iv) };
 }
 
+// ================================================================ música de fondo
+const MUSIC_EXTS = ['mp3', 'ogg', 'm4a', 'aac', 'wav', 'flac', 'webm', 'opus'];
+async function musicSection() {
+  const body = el('div');
+  const msg = el('div', { class: 'snd-msg', role: 'status' });
+  const say = (t, bad = false) => { msg.textContent = t; msg.className = `snd-msg ${bad ? 'bad' : 'ok'}`; };
+  const req = async (method, q, data) => {
+    const r = await fetch(`/api/admin/music?${new URLSearchParams(q)}`, { method, body: data, headers: data ? { 'Content-Type': 'application/octet-stream' } : undefined });
+    if (!r.ok) throw new Error(r.status === 413 ? 'pasa de 20 MB' : r.status === 400 ? 'formato no admitido' : `error ${r.status}`);
+    return r.json();
+  };
+  const load = async () => {
+    const list = await (await fetch('/api/admin/music', { cache: 'no-store' })).json();
+    const on = list.filter((x) => x.enabled).length;
+    body.replaceChildren(
+      el('p', { class: 'sub' }, list.length ? `${list.length} ${list.length === 1 ? 'canción' : 'canciones'} · ${on} ${on === 1 ? 'activa' : 'activas'}. En el juego suenan las activas en orden al azar, una tras otra.` : 'Todavía no hay música: el juego suena sin música de fondo.'),
+      list.length ? el('div', { class: 'mus' }, list.map((x) => {
+        const title = el('input', { type: 'text', value: x.title, maxlength: '80', 'aria-label': 'Nombre de la canción' });
+        title.addEventListener('change', async () => { try { await req('PATCH', { id: x.id, title: title.value }); say('Nombre guardado.'); } catch (e) { say(`No se guardó (${e.message}).`, true); } });
+        const act = el('input', { type: 'checkbox', checked: x.enabled });
+        act.addEventListener('change', async () => { try { await req('PATCH', { id: x.id, enabled: act.checked ? '1' : '0' }); load(); } catch (e) { say(`No se pudo (${e.message}).`, true); } });
+        const del = el('button', { type: 'button', class: 'btn', onclick: async () => {
+          if (!confirm(`¿Borrar "${x.title}"? No se puede deshacer.`)) return;
+          try { await req('DELETE', { id: x.id }); say(`"${x.title}" borrada.`); load(); } catch (e) { say(`No se pudo borrar (${e.message}).`, true); }
+        } }, '🗑 Borrar');
+        return el('div', { class: `mus-row ${x.enabled ? '' : 'off'}` }, title,
+          el('audio', { controls: true, preload: 'none', src: `/api/music/${x.file}` }),
+          el('label', { class: 'chk' }, act, 'Activa'), el('small', {}, `${x.ext.toUpperCase()} · ${kb(x.size)}`), del);
+      })) : null);
+  };
+  const picker = el('input', { type: 'file', multiple: true, accept: 'audio/*,.mp3,.ogg,.m4a,.aac,.wav,.flac,.webm,.opus', style: 'display:none' });
+  picker.addEventListener('change', async () => {
+    const files = [...picker.files];
+    let ok = 0;
+    for (const [i, f] of files.entries()) {
+      const ext = (f.name.split('.').pop() || '').toLowerCase();
+      if (!MUSIC_EXTS.includes(ext)) { say(`"${f.name}": formato no admitido (usa ${MUSIC_EXTS.join(', ')}).`, true); continue; }
+      if (f.size > 20 * 1024 * 1024) { say(`"${f.name}" pasa de 20 MB.`, true); continue; }
+      say(`Subiendo ${i + 1} de ${files.length}: ${f.name}…`);
+      try { await req('POST', { ext, title: f.name.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ').trim() }, await f.arrayBuffer()); ok++; }
+      catch (e) { say(`"${f.name}": no se pudo subir (${e.message}).`, true); }
+    }
+    picker.value = '';
+    if (ok) say(`🎵 ${ok === 1 ? 'Canción subida' : `${ok} canciones subidas`}: ya suenan en el juego para quien lo abra desde ahora.`);
+    load();
+  });
+  await load();
+  return card('🎵 Música de fondo', 'Sube canciones (mp3, ogg, m4a, aac, wav, flac, webm u opus; hasta 20 MB cada una). Puedes elegir varias a la vez. Usa música libre o con licencia para juegos.', '',
+    el('div', { class: 'toolbar' }, el('button', { type: 'button', class: 'btn main', onclick: () => picker.click() }, '📂 Subir canciones…')), msg, picker, body);
+}
+
 // ================================================================ sonidos (reemplazar los del juego)
 const SAMPLE = { hit: 18, land: 8, bump: 14 }; // un valor de ejemplo para los que cambian según la fuerza
 const EXTS = ['mp3', 'wav', 'ogg', 'm4a', 'flac', 'webm'];
@@ -431,7 +482,7 @@ async function soundsPage() {
       el('label', { class: 'snd-vol' }, 'Volumen', volIn, volTxt));
   };
   const n = Object.values(saved).filter((x) => x.file).length;
-  return [card('Sonidos', `Cada sonido del juego. Reemplazarlo sube el archivo al servidor y lo usa todo el que abra el juego desde ese momento (mp3, wav, ogg, m4a, flac o webm, hasta 3 MB). ${n ? `Hay ${n} ${n === 1 ? 'reemplazado' : 'reemplazados'}.` : 'Todavía suenan todos los originales.'}`, '',
+  return [await musicSection(), card('Efectos de sonido', `Cada sonido del juego. Reemplazarlo sube el archivo al servidor y lo usa todo el que abra el juego desde ese momento (mp3, wav, ogg, m4a, flac o webm, hasta 3 MB). ${n ? `Hay ${n} ${n === 1 ? 'reemplazado' : 'reemplazados'}.` : 'Todavía suenan todos los originales.'}`, '',
     msg, picker, el('div', { class: 'snds' }, SOUNDS.map(cardFor)))];
 }
 

@@ -8,7 +8,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { CONFIG } from '../config.js';
 import { Jelly, R, setSimStep } from '../jelly.js';
 import { fx } from '../fx.js';
-import { sfx } from '../sfx.js';
+import { sfx, soundAt, ear } from '../sfx.js';
 import { Pickups } from '../pickups.js';
 import { POWERS, OilSlicks } from '../powers.js';
 import { Projectiles } from '../projectiles.js';
@@ -61,9 +61,9 @@ export function hitEffects({ att, vic, contact, nh, K, air = false, dazed = fals
   fx.impact(contact.clone().setY(contact.y + 0.3), K * (air ? 1.25 : 1));
   if (!vic.dead) { vic.dent(back, K * (chain ? 1.2 : 1.3), 0.2); vic.squashVel -= 3; }
   if (!att.dead) att.dent(nh, K * 0.6, 0.3);
-  if (dazed) sfx.dizzy();
   shake?.(CONFIG.shake * Math.min(chain ? 1.5 : 1.8, K / 15));
-  sfx.hit(K);
+  // tu golpe (o el que te dan) suena fuerte; el de otros, según dónde fue
+  soundAt(att === ear.me || vic === ear.me ? 'me' : contact, () => { if (dazed) sfx.dizzy(); sfx.hit(K); });
 }
 const _hn = new THREE.Vector3();
 const _cn = new THREE.Vector3();
@@ -700,11 +700,11 @@ export class Sim {
     this.hooks.mute?.(false); // (en el servidor, lo que pasa al comer sí se manda)
     if (power) {
       fx.burst(j.pos.clone().setY(j.pos.y + j.r * 0.5), new THREE.Color('#ffd21a'), 8, 3, null, 0.07);
-      sfx.power();
+      soundAt(j, () => sfx.power());
       if (POWERS[power].throw) this.giveWeapon(j, power); else this.applyPower(j, power);
     } else {
       j.feed(m);
-      sfx.gulp();
+      soundAt(j, () => sfx.gulp());
       fx.burst(j.pos.clone().setY(j.pos.y + j.r * 0.5), new THREE.Color('#ffffff'), 4, 2.5, null, 0.06);
     }
     this.hooks.mute?.(true);

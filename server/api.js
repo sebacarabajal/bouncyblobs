@@ -4,6 +4,7 @@ import { adminUser } from './auth.js';
 import * as stats from './stats.js';
 import { parseUA, refineUA, gpuVendor, clientIP } from './ua.js';
 import * as sounds from './sounds.js';
+import * as music from './music.js';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const str = (v, max = 60) => (typeof v === 'string' ? v.slice(0, max).replace(/[\u0000-\u001f]/g, '') : null);
@@ -236,6 +237,30 @@ export function createApi({ pool, env, realtime = null }) {
         res.end(f.data);
         return true;
       }
+      // música de fondo: la lista (sólo las activas) y cada canción (por partes, como piden los reproductores)
+      if (url.pathname === '/api/music' && req.method === 'GET') { send(res, 200, await music.publicList(pool)); return true; }
+      if (url.pathname.startsWith('/api/music/') && req.method === 'GET') {
+        const f = await music.file(pool, url.pathname.slice('/api/music/'.length));
+        if (!f) return send(res, 404, { error: 'no existe' }), true;
+        const data = f.data, total = data.length;
+        res.setHeader('Content-Type', f.mime);
+        res.setHeader('Accept-Ranges', 'bytes');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        const m = /^bytes=(\d*)-(\d*)$/.exec(String(req.headers.range || ''));
+        if (m && (m[1] || m[2])) {
+          let a = m[1] ? Number(m[1]) : total - Number(m[2]), b = m[1] && m[2] ? Number(m[2]) : total - 1;
+          a = Math.max(0, a); b = Math.min(total - 1, b);
+          if (a > b) { res.statusCode = 416; res.setHeader('Content-Range', `bytes */${total}`); res.end(); return true; }
+          res.statusCode = 206;
+          res.setHeader('Content-Range', `bytes ${a}-${b}/${total}`);
+          res.setHeader('Content-Length', b - a + 1);
+          res.end(data.subarray(a, b + 1));
+          return true;
+        }
+        res.setHeader('Content-Length', total);
+        res.end(data);
+        return true;
+      }
       if (url.pathname === '/api/records' && req.method === 'GET') {
         const mode = MODES.has(url.searchParams.get('mode')) ? url.searchParams.get('mode') : 'ffa';
         const sp = url.searchParams;
@@ -276,6 +301,30 @@ export function createApi({ pool, env, realtime = null }) {
             send(res, 200, { ok: true });
             return true;
           }
+        }
+        // música: subir (una por pedido), renombrar, activar/desactivar, borrar
+        if (url.pathname === '/api/admin/music') {
+          if (req.method === 'GET') { send(res, 200, await music.adminList(pool)); return true; }
+          if (req.method === 'POST') {
+            const ext = String(url.searchParams.get('ext') || '').toLowerCase();
+            const title = String(url.searchParams.get('title') || '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) || 'Sin nombre';
+            if (!music.MUSIC_EXT[ext]) return send(res, 400, { error: 'formato' }), true;
+            if (Number(req.headers['content-length']) > music.MUSIC_MAX) return send(res, 413, { error: 'muy grande' }), true;
+            let data;
+            try { data = await readRaw(req, music.MUSIC_MAX); } catch { return send(res, 413, { error: 'muy grande' }), true; }
+            if (!data.length) return send(res, 400, { error: 'vacío' }), true;
+            send(res, 200, { id: await music.upload(pool, title, ext, data) });
+            return true;
+          }
+          const id = int(url.searchParams.get('id'), 1, 1e9);
+          if (!id) return send(res, 400, { error: 'id' }), true;
+          if (req.method === 'PATCH') {
+            const t = url.searchParams.get('title'), en = url.searchParams.get('enabled');
+            await music.update(pool, id, { title: t == null ? null : t.replace(/[\u0000-\u001f]/g, '').trim().slice(0, 80) || 'Sin nombre', enabled: en == null ? null : en === '1' });
+            send(res, 200, { ok: true });
+            return true;
+          }
+          if (req.method === 'DELETE') { await music.remove(pool, id); send(res, 200, { ok: true }); return true; }
         }
         // panel: una ruta por página; todas aceptan los mismos filtros (ver stats.parseFilters)
         const sp = url.searchParams, f = stats.parseFilters(sp), tz = env.REPORT_TZ || 'America/Argentina/Buenos_Aires';

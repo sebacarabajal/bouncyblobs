@@ -10,7 +10,7 @@ import GUI from 'lil-gui';
 import { CONFIG } from './config.js';
 import { Input } from './input.js';
 import { fx } from './fx.js';
-import { sfx } from './sfx.js';
+import { sfx, ear } from './sfx.js';
 import { FaceBatch } from './facebatch.js';
 import { Adaptive } from './adaptive.js';
 import { loadSoundOverrides } from './sfx.js';
@@ -746,7 +746,10 @@ async function main() {
     won: teams.active ? teams.wins[player.team] : undefined, lost: teams.active ? teams.wins[1 - player.team] : undefined,
   });
   perf.onReport = (rep) => telemetry.perf({ ...rep, fpsTarget: adaptive.target, resScale: adaptive.resScale, hz: adaptive.hz, lateRate: adaptive.lateRate, win: `${innerWidth}x${innerHeight}@${devicePixelRatio}` }, !inLobby && !!arena);
-  telemetry.netFn = () => online.auditReport(); // en línea: cómo anduvo la red cada minuto (ping, correcciones, golpes fantasma)
+  telemetry.netFn = () => online.auditReport();
+  // dónde escuchás: tu blob (o adonde mira la cámara si estás afuera); en el menú y el tutorial, todo igual
+  ear.me = player;
+  ear.pos = () => (inLobby || tutorial.active ? null : player.dead ? rig.target : player.pos); // en línea: cómo anduvo la red cada minuto (ping, correcciones, golpes fantasma)
   {
     const gl = renderer.getContext(), dbg = gl.getExtension('WEBGL_debug_renderer_info');
     telemetry.start({

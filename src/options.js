@@ -3,6 +3,7 @@
 // Lo que elige el jugador se guarda en este navegador (gelatinas.prefs; las teclas, en keys.js).
 import { t, translate, onLang, setLang, getLang, LANGS, refreshTexts } from './i18n.js';
 import { ACTIONS, keys, onKeys, usePreset, bind, keyName } from './keys.js';
+import { music } from './music.js';
 
 const PREFS = 'gelatinas.prefs';
 export function loadPrefs() { try { return JSON.parse(localStorage.getItem(PREFS)) || {}; } catch { return {}; } }
@@ -50,6 +51,11 @@ export class Options {
           <h3 data-i18n="op.sound"></h3>${chips('op-mute', ['on', 'off'], (k) => 'op.' + k)}
           <h3 data-i18n="op.volume"></h3>
           <div class="op-vol"><input type="range" min="0" max="100" step="1" /><b></b></div>
+          <div class="op-music">
+            <h3 data-i18n="op.music"></h3>
+            <div class="op-vol op-mvol"><input type="range" min="0" max="100" step="1" /><b></b></div>
+            <div class="op-mrow"><span class="op-mnow"></span><button class="op-mnext" data-i18n="op.musicNext"></button></div>
+          </div>
         </section>
         <section data-tab="lang">
           <div class="op-chips op-langs">${Object.entries(LANGS).map(([k, n]) => `<button data-k="${k}">${n}</button>`).join('')}</div>
@@ -71,7 +77,12 @@ export class Options {
     $$('.op-presets button').forEach((b) => click(b, () => usePreset(b.dataset.k)));
     $$('.op-keys button').forEach((b) => click(b, () => { this.capturing = b.dataset.a; this._render(); }));
     $$('.op-fps button').forEach((b) => click(b, () => { ctx.setFps(b.dataset.k); this.prefs.fps = b.dataset.k; savePrefs(this.prefs); this._render(); }));
-    $$('.op-mute button').forEach((b) => click(b, () => { ctx.sfx.muted = b.dataset.k === 'off'; this.prefs.muted = ctx.sfx.muted; savePrefs(this.prefs); this._render(); }));
+    $$('.op-mute button').forEach((b) => click(b, () => { ctx.sfx.muted = b.dataset.k === 'off'; this.prefs.muted = ctx.sfx.muted; savePrefs(this.prefs); music.apply(); this._render(); }));
+    // música de fondo: volumen aparte y "otra canción"
+    const mvol = $('.op-mvol input');
+    mvol.addEventListener('input', () => { music.setVol(mvol.value / 100); this.prefs.musicVol = music.vol; savePrefs(this.prefs); this._render(); });
+    click($('.op-mnext'), () => music.next());
+    music.onChange = () => this._render();
     $$('.op-langs button').forEach((b) => click(b, () => setLang(b.dataset.k)));
     const vol = $('.op-vol input');
     vol.addEventListener('input', () => { ctx.sfx.master = vol.value / 100; this.prefs.volume = ctx.sfx.master; savePrefs(this.prefs); this._render(); });
@@ -80,6 +91,7 @@ export class Options {
     // lo guardado (sonido y fluidez)
     if (this.prefs.volume != null) ctx.sfx.master = this.prefs.volume;
     if (this.prefs.muted != null) ctx.sfx.muted = this.prefs.muted;
+    if (this.prefs.musicVol != null) music.setVol(this.prefs.musicVol);
     if (FPS.includes(this.prefs.fps)) ctx.setFps(this.prefs.fps);
 
     // Esc abre/cierra · capturar la tecla nueva (va antes que el resto del juego)
@@ -142,6 +154,12 @@ export class Options {
     const vol = el.querySelector('.op-vol input');
     vol.value = Math.round((ctx.sfx.master ?? 1) * 100);
     el.querySelector('.op-vol b').textContent = `${vol.value} %`;
+    const mv = el.querySelector('.op-mvol input');
+    mv.value = Math.round(music.vol * 100);
+    el.querySelector('.op-mvol b').textContent = `${mv.value} %`;
+    el.querySelector('.op-music').style.display = music.started && !music.has ? 'none' : ''; // sin canciones subidas, no se muestra
+    el.querySelector('.op-mnow').textContent = music.title ? `🎵 ${music.title}` : '';
+    el.querySelector('.op-mnext').style.display = music.has ? '' : 'none';
     on('.op-langs button', (b) => b.dataset.k === getLang());
     this._status();
   }

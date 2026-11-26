@@ -4,7 +4,7 @@ import RAPIER from '@dimforge/rapier3d-compat';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { CONFIG } from './config.js';
 import { fx } from './fx.js';
-import { sfx } from './sfx.js';
+import { sfx, soundAt } from './sfx.js';
 
 export const R = 0.9; // radio del collider físico
 const ARM_SCALE = 3; // tamaño de los brazos musculosos (poder Fuerza)
@@ -410,7 +410,7 @@ export class Jelly {
       vy = this.airDash ? Math.min(vy, 0) - 5 : Math.max(vy, 2.5);
       this.stretchVel += 8;
       this.lastLaunch = globalThis.performance?.now?.() ?? 0;
-      sfx.dash();
+      soundAt(this, () => sfx.dash());
       this.onAction?.(this.airDash ? 'dive' : 'dash'); // el tutorial escucha esto
     }
 
@@ -460,7 +460,7 @@ export class Jelly {
       this.grounded = false;
       this.squashVel += 6;
       this.lastJump = globalThis.performance?.now?.() ?? 0;
-      sfx.jump();
+      soundAt(this, () => sfx.jump());
       this.onAction?.('jump');
     }
     if (!cmd.jumpHeld && vy > 0 && !stunned) vy += CONFIG.gravity * 1.3 * dt; // salto variable
@@ -491,7 +491,7 @@ export class Jelly {
         this.dent(_v.copy(_n).negate(), mag * 0.5, 0.55);
         if (mag > 9) {
           fx.burst(_v.set(this.pos.x, this.pos.y - this.r + 0.1, this.pos.z), this.color, Math.min(14, mag * 0.7 | 0), mag * 0.25, null, 0.09 * this.size, true);
-          sfx.land(mag);
+          soundAt(this, () => sfx.land(mag));
         }
       } else {
         this.dent(_v.copy(_n).negate(), mag);
