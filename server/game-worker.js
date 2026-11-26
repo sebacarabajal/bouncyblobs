@@ -54,6 +54,7 @@ class Room {
         dent: (j, dir, s, spread) => ev('dn', j.id, encArg(dir), encArg(s), encArg(spread)),
         teamEvent: (type, d) => ev('tm', type, d),
         ko: (killer, victim, pts) => ev('ko', killer.id, victim.id, pts),
+        cleared: () => ev('clr'),
         who: (j) => { room.who = j; },
         mute: (m) => { room.muted = m; },
       },
@@ -160,7 +161,7 @@ class Room {
     const cmdFor = (j) => this.cmdFor(j);
     while (this.acc >= STEP) { this.sim.step(cmdFor, { doSkin: false }); this.acc -= STEP; }
     this.snapAcc += dt;
-    if (this.snapAcc >= 1 / SNAP_HZ) { this.snapAcc = 0; this.snapshot(); }
+    if (this.snapAcc >= 1 / SNAP_HZ) { this.snapAcc = Math.min(this.snapAcc - 1 / SNAP_HZ, 1 / SNAP_HZ); this.snapshot(); }
     cur = null;
     this.emptyFor = this.members.size ? 0 : this.emptyFor + dt;
   }

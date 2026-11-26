@@ -587,7 +587,7 @@ async function main() {
     input.consumeEdges(pc);
     input.mashCount = 0; // (ya no se acorta el mareo apretando teclas)
     [pc.mx, pc.mz] = rig.toWorld(pc.mx, pc.mz); // flechas relativas a la cámara
-    if (online.active) { online.step(pc, doSkin); return; }
+    if (online.active) { const t0 = performance.now(); online.step(pc, doSkin); perf.add('online', performance.now() - t0); return; }
     sim.step((j) => (j === player ? pc : null), { doSkin, perfAdd: (k, ms) => perf.add(k, ms) });
   }
 
@@ -729,7 +729,7 @@ async function main() {
   openLobby();
 
   perf.ctxFn = () => ({
-    arena: arenaName, fpsCap: CONFIG.fpsCap, monitorHz: adaptive.hz, fpsTarget: Math.round(adaptive.target * 10) / 10, resScale: adaptive.resScale, bloom: CONFIG.bloom, inLobby, tutorial: tutorial.active, quality: Q.level, qualityAuto: Q.auto, touch: !!touchUI,
+    arena: arenaName, online: online.active ? { room: online.room?.id, rtt: Math.round(online.rtt * 1000), snapMs: online.takeNetMs(), events: online.events.length, pickups: pickups.list.length } : null, fpsCap: CONFIG.fpsCap, monitorHz: adaptive.hz, fpsTarget: Math.round(adaptive.target * 10) / 10, resScale: adaptive.resScale, bloom: CONFIG.bloom, inLobby, tutorial: tutorial.active, quality: Q.level, qualityAuto: Q.auto, touch: !!touchUI,
     jellies: jellies.filter((j) => !j.dead).length, onScreen: jellies.filter((j) => !j.dead && !j.offscreen).length,
     pickups: pickups.list.length, oilSlicks: oil.list.length, slices: slices.list.length, shots: shots.list.length,
   });

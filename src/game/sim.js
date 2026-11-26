@@ -81,6 +81,7 @@ export class Sim {
       onNewRound: () => {
         // ronda nueva: todos vuelven a su lugar de la formación, con masa 1 (los puntos siguen)
         this.pickups.clear(); this.oil.clear(); this.shots.clear();
+        this.hooks.cleared?.();
         for (const j of this.jellies) if (!j.benched && !j.away) j.respawn(this.spawnPoint(j));
       },
       emit: (type, d) => this.hooks.teamEvent?.(type, d),
@@ -112,6 +113,7 @@ export class Sim {
     this.pickups.clear();
     this.oil.clear();
     this.shots.clear();
+    this.hooks.cleared?.();
     const playing = this.arena.players ?? 12; // las que sobran quedan en el banco, fuera del juego
     this.jellies.forEach((j, i) => {
       j.kos = 0; j.falls = 0; j.score = 0;

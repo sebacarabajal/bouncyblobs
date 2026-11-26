@@ -8,7 +8,8 @@ import * as THREE from 'three';
 import { R } from '../jelly.js';
 import { fx } from '../fx.js';
 import { sfx } from '../sfx.js';
-import { STEP } from '../game/sim.js';
+import { STEP, Sim } from '../game/sim.js';
+import { CONFIG } from '../config.js';
 import { F, INTERP_DELAY } from './protocol.js';
 import { TEAM_COLORS } from '../game/teamlogic.js';
 
@@ -77,7 +78,7 @@ export class Online {
     this.active = false;
     this.ws = null;
     clearInterval(this._ping);
-    for (const j of this.sim.jellies) { j.setRemote(false); j.netId = null; }
+    for (const j of this.sim.jellies) { j.setRemote(false); j.collider.setSensor(false); j.netId = null; }
     this.sim.pickups.remote = false;
     this.sim.pickups.clear();
     this.sim.oil.clear();
@@ -104,7 +105,12 @@ export class Online {
     sim.pickups.remote = true;
     sim.pickups.clear(); sim.oil.clear(); sim.shots.clear();
     for (const p of m.pickups) sim.pickups.addRemote(p);
-    sim.jellies.forEach((j, i) => { j.netId = this._idx(i); j.setRemote(i !== 0); });
+    this.bodyMode ||= 'dyn'; // los demás: empujables y persiguiendo su lugar (medido: el que menos corrige; 'kin' = inamovibles, 'ghost' = no chocan)
+    sim.jellies.forEach((j, i) => {
+      j.netId = this._idx(i);
+      j.setRemote(i !== 0 && this.bodyMode !== 'dyn');
+      if (i !== 0) j.collider.setSensor(this.bodyMode === 'ghost');
+    });
     this._roster(m.roster);
     if (m.ar) sim.arena.setState?.(m.ar, m.time);
     this._ping = setInterval(() => this._send({ t: 'ping', c: performance.now() / 1000 }), 2000);
@@ -141,6 +147,8 @@ export class Online {
 
   // ---------------------------------------------------------------- fotos del servidor
   _snap(m) {
+    const t0 = performance.now();
+    this._snapT = t0;
     const now = performance.now() / 1000;
     // reloj del servidor: se ajusta de a poco (si se va muy lejos, de golpe)
     const target = m.time - now;
@@ -152,6 +160,7 @@ export class Online {
     if (this.snaps.length > 40) this.snaps.shift();
     for (const e of m.ev) this.events.push(e);
     this._own(m);
+    this.netMs = (this.netMs || 0) + performance.now() - t0; // para el registro de rendimiento
   }
 
   // tu blob: lo que diga el servidor manda en todo, salvo la posición (que se corrige de a poco)
@@ -264,9 +273,10 @@ export class Online {
     if (!me.dead && !me.impaled) {
       me.control(STEP, frozen ? STILL : pc);
     }
-    if (me.visOff) me.visOff.multiplyScalar(0.9); // lo que se ve alcanza a la física de a poco
+    if (me.visOff) me.visOff.multiplyScalar(me.visOff.lengthSq() > 1 ? 0.95 : 0.9); // lo que se ve alcanza a la física de a poco (más despacio si fue grande)
     sim.world.step();
     if (!me.dead) me.postStep(STEP);
+    if (this.predictHits !== false) this._predictHits(me);
     if (!me.dead && !me.impaled) {
       const v = me.body.linvel();
       this.history.push({ seq: this.stepSeq, x: me.pos.x, y: me.pos.y, z: me.pos.z, vx: v.x, vy: v.y, vz: v.z });
@@ -310,13 +320,33 @@ export class Online {
     const out = !!(flags & F.out);
     j.benched = out;
     if ((flags & F.dead) || out) { if (!j.dead) j.kill(); return; }
-    if (j.dead) { j.respawn(_v.set(a1[1], a1[2], a1[3])); j.setRemote(true); }
+    if (j.dead) { j.respawn(_v.set(a1[1], a1[2], a1[3])); j.setRemote(this.bodyMode !== 'dyn'); }
     this._fields(j, a1, false);
     if (j.impaled) { j.impaledT = a1[23]; return; }
+    // si en la foto anterior estaba muerto (o se teletransportó: reapareció, formación de equipos), va directo:
+    // interpolar lo haría "volar" desde donde murió hasta donde reapareció
+    const jump = (a0[10] & (F.dead | F.out)) || Math.hypot(a1[1] - a0[1], a1[3] - a0[3]) > 8;
+    if (jump) k = 1;
     const x = a0[1] + (a1[1] - a0[1]) * k, y = a0[2] + (a1[2] - a0[2]) * k, z = a0[3] + (a1[3] - a0[3]) * k;
+    if (jump) j.pos.set(x, y, z);
     j.prevPos.copy(j.pos);
-    j.pos.set(x, y, z);
-    j.body.setNextKinematicTranslation({ x, y, z });
+    j.pos.set(x, y, z); // lo que se VE: interpolado (suave)
+    // para los CHOQUES con tu blob: donde va a estar cuando el servidor procese tu tecla (la última foto
+    // proyectada con su velocidad). Si chocaras contra donde se ve, chocarías con alguien que ya se movió.
+    const last = this.snaps[this.snaps.length - 1];
+    const al = last?.b.get(sid);
+    j.netVel = al ? { x: al[4], y: al[5], z: al[6] } : null;
+    let tx = x, ty = y, tz = z;
+    if (al && !(al[10] & F.dead)) {
+      const ahead = Math.min(0.35, Math.max(0, performance.now() / 1000 + this.offset - last.time + this.rtt / 2 + 0.07));
+      tx = al[1] + al[4] * ahead; ty = al[2]; tz = al[3] + al[6] * ahead;
+    }
+    if (this.bodyMode === 'dyn') {
+      // cuerpo normal (tu blob lo puede empujar), que persigue su lugar con la velocidad del servidor
+      const b = j.body.translation(), ov = j.netVel || { x: 0, y: 0, z: 0 };
+      if (Math.hypot(tx - b.x, tz - b.z) > 3) j.body.setTranslation({ x: tx, y: ty, z: tz }, true);
+      j.body.setLinvel({ x: ov.x + (tx - b.x) * 8, y: ov.y + (ty - b.y) * 8, z: ov.z + (tz - b.z) * 8 }, true);
+    } else j.body.setNextKinematicTranslation({ x: tx, y: ty, z: tz });
     j.yaw = angLerp(a0[7], a1[7], k);
     j.targetYaw = j.yaw;
     // tamaño según la masa (como hace control() en tu blob)
@@ -327,6 +357,33 @@ export class Online {
     if (j.dashing && Math.random() < 0.5) fx.burst(_v.set(x, y - 0.4 * j.size, z), j.airDash ? _white : j.color, j.airDash ? 2 : 1, 1.5, null, 0.07 * j.size);
     else if (j.sprinting && j.grounded && Math.random() < 0.25) fx.burst(_v.set(x, y - j.r + 0.15, z), j.color, 1, 2, null, 0.06 * j.size);
     if (j.impaled && Math.random() < STEP * 6) fx.burst(_v.set(x, y - j.r * 0.3, z), j.color, 1, 1, null, 0.07);
+  }
+
+  // Golpes de TU blob, predichos (la misma fórmula que el servidor): si tu embestida pega, rebotás ya; si te
+  // embisten, salís volando ya. Sin esto el golpe se sentía 160 ms tarde y después "te corría" de golpe.
+  // Si el servidor no coincide, lo corrige como siempre.
+  _predictHits(me) {
+    if (me.dead || me.impaled) return;
+    for (const o of this.sim.jellies) {
+      if (o === me || o.dead || o.benched || !o.netVel) continue;
+      if (me.team != null && o.team === me.team) continue;
+      const bp = o.body.translation(); // donde va a estar para el servidor (ver _remote)
+      const dx = bp.x - me.pos.x, dy = bp.y - me.pos.y, dz = bp.z - me.pos.z, d = Math.hypot(dx, dy, dz);
+      if (d > me.r + o.r + 0.25 || d < 1e-4) continue;
+      const hl = Math.hypot(dx, dz) || 1, nx = dx / hl, nz = dz / hl;
+      const ov = o.netVel;
+      if (me.dashing) {
+        const closing = (me.vBefore.x - ov.x) * nx + (me.vBefore.z - ov.z) * nz;
+        if (closing >= 6) { me.dashTimer = 0; const r = 4 / Math.sqrt(me.mass); me.knockback(-nx * r, 3, -nz * r, 0.12); }
+      } else if (o.dashing && this.rt - (o._hitAt || -9) > 0.4) {
+        const closing = (ov.x - me.vBefore.x) * -nx + (ov.z - me.vBefore.z) * -nz;
+        if (closing >= 6) {
+          o._hitAt = this.rt;
+          const { K } = Sim.hitForce(o.mass, me.mass, me.damage, closing, o.airDash, o.buffs.strength > 0, me.daze > 0);
+          me.knockback(-nx * K, 3 + K * CONFIG.knockLift, -nz * K, CONFIG.stunBase + K * CONFIG.stunPerForce);
+        }
+      }
+    }
   }
 
   // ---------------------------------------------------------------- eventos (a su hora: la del blob que se ve)
@@ -361,10 +418,14 @@ export class Online {
       case 'im': { const j = this.jelly(e[2]); if (j) { j.impale(dec(e[3]), dec(e[4]), e[5]); j.impaleN = dec(e[4]); } break; }
       case 'dn': { const j = this.jelly(e[2]); if (j && !j.dead) j.dent(dec(e[3]), e[4], e[5]); break; }
       case 'sh': this.ui.shake?.(e[2]); break;
+      case 'clr': sim.pickups.clear(); sim.oil.clear(); sim.shots.clear(); break;
       case 'tm': this.ui.teamEvent?.(e[2], e[3]); break;
       default: break;
     }
   }
+
+  // ms gastados leyendo fotos desde la última vez (registro de rendimiento, cada 10 s)
+  takeNetMs() { const v = +(this.netMs || 0).toFixed(1); this.netMs = 0; return v; }
 
   // estado de equipos para el marcador (o null)
   teamState() { return this.tm; }

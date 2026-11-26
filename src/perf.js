@@ -5,7 +5,7 @@
 // perf/perf-log.jsonl (ver vite.config.js). En la versión publicada sólo muestra el contador.
 
 const HITCH_MS = 50;
-const PARTS = ['bots', 'physics', 'hits', 'arena', 'pickups', 'skinSim'];
+const PARTS = ['bots', 'physics', 'hits', 'arena', 'pickups', 'skinSim', 'online'];
 const REPORT_EVERY = 10; // segundos
 
 export class PerfMonitor {
